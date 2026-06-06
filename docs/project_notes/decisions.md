@@ -102,3 +102,54 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 **Consequences:**
 - ✅ Robust, well-maintained S3 client and no-CGO SQLite.
 - ❌ Binary exceeds the size goal — flagged for possible future trimming (e.g. a leaner S3 client).
+
+### ADR-008: Native B2 backend implemented over stdlib net/http, not a B2 SDK (2026-06-06)
+
+**Context:**
+- Adding a native Backblaze B2 API client alongside the existing S3-compatible client. Existing SDKs (e.g. `blazer`) would add a significant dependency; the B2 v2 API is simple enough to drive directly.
+
+**Decision:**
+- Implement `B2Backend` in `internal/b2/native.go` and `internal/b2/largefile.go` using only stdlib `net/http`, `encoding/json`, and `crypto/sha1`. Target the **B2 v2 API** (`/b2api/v2/...` endpoints).
+- Introduce a unified `b2.Backend` interface (embedding the existing `b2.Uploader`) that both `S3Backend` and `B2Backend` satisfy. `backup.Service` continues to depend only on the narrow `b2.Uploader` view (interface segregation) — it has no need for `Download`, `List`, or `Delete`; manual file commands depend on the wider `Backend`.
+- `FakeBackend` (in-memory map) replaces the old `FakeUploader` and implements the full `Backend` interface for tests.
+
+**Alternatives Considered:**
+- Third-party B2 Go SDK — Rejected: extra dependency, import cycle risk, maintenance burden.
+- Reuse aws-sdk-go-v2 for B2 native path — Not applicable: B2 native API is not S3-compatible.
+
+**Consequences:**
+- ✅ Zero new third-party dependencies; small code surface easy to audit.
+- ✅ Interface segregation keeps `backup` package unchanged.
+- ❌ B2 API field names/headers must match Backblaze's docs exactly — httptest-based tests cover shape but not live auth.
+
+### ADR-009: Backend mode stored in `backend` column; default s3; `--backend` flag for per-command override (2026-06-06)
+
+**Context:**
+- Users may want to switch between S3-compatible and native B2 globally, or try one backend for a single command without changing the stored default.
+
+**Decision:**
+- Add a `backend TEXT` column to the `config` table. `store.GetBackend`/`store.SetBackend` read and write it; `NULL`/empty defaults to `"s3"` so existing databases behave unchanged.
+- `backuprepo backend [s3|b2]` shows or persists the backend.
+- Every manual file command (`ls`, `get`, `put`, `rm`, `find`) and `upload` accept a `--backend s3|b2` flag that overrides the stored value for that invocation only.
+- Resolution order: `--backend` flag → stored `backend` → `"s3"`.
+
+**Consequences:**
+- ✅ Backward-compatible: old DBs without the `backend` column default to `s3`.
+- ✅ Per-command override keeps the stored default clean.
+- ❌ Two code paths (S3 vs B2) must be kept in sync for any new bucket operation.
+
+### ADR-010: B2 addressed by bucket ID for list/upload, bucket name for download (2026-06-06)
+
+**Context:**
+- The Backblaze B2 v2 native API uses **bucket ID** (`BucketID` string) for `b2_list_file_names`, `b2_get_upload_url`, and `b2_start_large_file`, but uses **bucket name** in the download URL path (`/file/<bucket-name>/<key>`). ADR-004 originally stored only the bucket name (sufficient for S3).
+
+**Decision:**
+- Extend `store.RemoteConfig` with a `BucketID string` field, persisted to a new `bucket_id TEXT` column in the `config` table.
+- `backuprepo init` now prompts for the bucket ID (after the bucket name); it is optional (blank is allowed) so existing S3-only users are not forced to re-init.
+- `b2.Config` carries both `BucketName` (S3 + B2 download) and `BucketID` (B2 list/upload); each backend uses only what it needs.
+- A schema migration in `store.Open` adds `bucket_id` and `backend` columns to pre-existing databases via `ALTER TABLE config ADD COLUMN ...`.
+
+**Consequences:**
+- ✅ Both backends work from the same stored config without separate init flows.
+- ✅ Migration is safe for existing users (column defaults to empty string).
+- ❌ Users must look up the bucket ID in the B2 console (documented in README and init prompts).
