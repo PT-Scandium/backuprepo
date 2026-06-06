@@ -112,4 +112,37 @@ This repository is in early development. Licensed under MIT (PT-Scandium).
 
 ## Build/Test/Lint Commands
 
-No build system, tests, or linting configured yet.
+- Build: `go build -ldflags="-s -w" -o backuprepo .` (Go 1.25+, no CGO)
+- Test: `go test ./...`
+- Vet/format: `go vet ./...` and `gofmt -l .`
+
+## Implementation status (read before relying on the spec above)
+
+The spec above is the original aspirational design. The **core CLI is implemented and merged** (`internal/{apperr,crypto,config,store,b2,backup,cli}` + `main.go`; subcommands `init`/`watch`/`unwatch`/`list`/`status`/`upload`/`config`). The **daemon and web UI (port 9171) are NOT yet built.**
+
+Several invariants above were deliberately changed in implementation — see `docs/project_notes/decisions.md` for the authoritative record. Notably: DB uses **pure-Go SQLite + AES-256-GCM field encryption, NOT SQLCipher** (ADR-001); uploads are **per-file, not tar+gzip** (ADR-003); buckets are addressed by **name, not ID** (ADR-004); typed errors live in `internal/apperr`, not a root `errors.go` (ADR-005).
+
+## Project Memory System
+
+This project maintains institutional knowledge in `docs/project_notes/` for consistency across sessions.
+
+### Memory Files
+
+- **bugs.md** — Bug log with dates, root causes, solutions, and prevention notes
+- **decisions.md** — Architectural Decision Records (ADRs) with context and trade-offs
+- **key_facts.md** — Project configuration, ports, paths, constants, package map
+- **issues.md** — Work log of completed/pending work
+
+### Memory-Aware Protocols
+
+- **Before proposing architectural changes:** check `docs/project_notes/decisions.md` for existing decisions; if a change conflicts, acknowledge the prior ADR and explain why revisiting it is warranted.
+- **When encountering errors/bugs:** search `docs/project_notes/bugs.md` for similar issues and apply known fixes; document new bugs and solutions when resolved.
+- **When looking up configuration:** check `docs/project_notes/key_facts.md` (ports, paths, constants) before assuming.
+- **When completing work:** log it in `docs/project_notes/issues.md`.
+- **When the user requests a memory update:** update the appropriate file following its established format (bullet lists, dates, concise entries).
+
+### Style Guidelines for Memory Files
+
+- Prefer bullet lists over tables; keep entries concise (1–3 lines).
+- Always include dates; include URLs for tickets/PRs/docs where available.
+- Manual cleanup of old entries is expected (not automated).
