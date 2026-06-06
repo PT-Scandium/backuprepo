@@ -37,6 +37,7 @@ func TestInitThenConfigMasksSecret(t *testing.T) {
 		"0001keyid",                              // keyID
 		"K001-this-is-secret",                    // appKey
 		"my-bucket",                              // bucket name
+		"buck-et-id-123",                         // bucket ID  (NEW)
 		"https://s3.us-west-004.backblazeb2.com", // endpoint
 		"us-west-004",                            // region
 		"",                                       // first folder (skip)

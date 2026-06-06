@@ -14,7 +14,7 @@ Requires Go 1.25+. No CGO — uses pure-Go SQLite (`modernc.org/sqlite`).
 go build -ldflags="-s -w" -o backuprepo .
 ```
 
-The stripped binary is approximately **14 MB** (aws-sdk-go-v2 + modernc.org/sqlite account for most of the size; below the <10 MB original target but noted for future trimming).
+The stripped binary is approximately **14 MB** (aws-sdk-go-v2 + modernc.org/sqlite account for most of the size; this is **above** the <10 MB original target and is noted for future trimming).
 
 ---
 
@@ -43,11 +43,11 @@ This section walks through a complete first-time setup and a typical backup sess
 
 In the [Backblaze B2 console](https://secure.backblaze.com/b2_buckets.htm):
 
-1. **Create a bucket** (or pick an existing one). Note its **name** — e.g. `my-backups`. (You do **not** use the numeric bucket ID; see the section further down.)
+1. **Create a bucket** (or pick an existing one). Note both its **name** (e.g. `my-backups`) and its **bucket ID** (the alphanumeric ID shown in the bucket list). `init` asks for both — the bucket name is used by the S3-compatible API and for downloads; the bucket ID is used by the native B2 API for listing and uploads.
 2. Go to **Application Keys** → **Add a New Application Key**. Give it read/write access to your bucket. Backblaze shows you a **keyID** and an **applicationKey** — copy both now, because the applicationKey is shown only once.
 3. On the **Buckets** page, find your bucket's **Endpoint**, e.g. `s3.us-west-004.backblazeb2.com`. Your **region** is the middle segment of that hostname — `us-west-004`.
 
-You now have the five values `init` will ask for: keyID, applicationKey, bucket name, S3 endpoint URL, and region.
+You now have the six values `init` will ask for: keyID, applicationKey, bucket name, bucket ID, S3 endpoint URL, and region.
 
 ### 1. First-time setup — `init`
 
@@ -58,6 +58,7 @@ $ ./backuprepo init
 Backblaze keyID (access key ID): 0001abcdef0123456789
 Backblaze applicationKey (secret): K001-XXXXXXXXXXXXXXXXXXXXXXXXXXX
 Bucket name: my-backups
+Bucket ID (for native B2 API): e73ede9969c64827
 S3 endpoint URL (e.g. https://s3.us-west-004.backblazeb2.com): https://s3.us-west-004.backblazeb2.com
 S3 region (e.g. us-west-004): us-west-004
 Configuration saved.
@@ -88,6 +89,7 @@ Stopped watching /home/me/Documents
 ```text
 $ ./backuprepo status
 Status: configured
+Backend: s3
 Watched folders: 1
 Pending uploads: 12
 ```
@@ -138,6 +140,8 @@ $ ./backuprepo config
 Endpoint:    https://s3.us-west-004.backblazeb2.com
 Region:      us-west-004
 Bucket:      my-backups
+Bucket ID:   e73ede9969c64827
+Backend:     s3
 Key ID:      0001abcdef0123456789
 App Key:     ****XXXX
 Watched folders: 1
@@ -157,24 +161,118 @@ Watched folders: 1
 | `backuprepo list` | List watched folders and all tracked files with last-backup timestamps |
 | `backuprepo status` | Show whether configured, how many folders are watched, and how many files are pending upload |
 | `backuprepo upload` | Scan watched folders and upload every file that has changed since the last backup; no-op if nothing has changed |
-| `backuprepo config` | Show current configuration (endpoint, region, bucket, key ID, and masked app key) |
+| `backuprepo config` | Show current configuration (endpoint, region, bucket, bucket ID, backend, key ID, and masked app key) |
+| `backuprepo ls [path] [-r]` | List bucket contents; folders shown with trailing `/` |
+| `backuprepo get <remote> [local] [-r]` | Download an object or (with `-r`) all objects under a prefix |
+| `backuprepo put <local> [remote] [-r]` | Upload a file or (with `-r`) a directory |
+| `backuprepo rm <path> [-r] [-f]` | Delete an object or folder prefix; confirms unless `-f` or `-y` |
+| `backuprepo find <query> [prefix]` | Case-insensitive substring search of object keys |
+| `backuprepo backend [s3\|b2]` | Show or set the stored storage backend |
 | `backuprepo help` | Print usage |
 
 Exit codes: `0` on success, `1` on error (message written to stderr).
 
 ---
 
-## B2 configuration — bucket name, not bucket ID
+## Storage backends
 
-Backblaze B2 has two identifiers for every bucket: a human-readable **name** (e.g. `my-backups`) and a numeric **ID** (e.g. `abc123456789`). The S3-compatible API addresses buckets by **name**. `backuprepo init` asks for the name.
+backuprepo supports two storage backends, selectable at any time:
 
-`init` prompts for:
+| Backend | Identifier | Protocol |
+|---------|-----------|---------|
+| **S3-compatible** (default) | `s3` | aws-sdk-go-v2, S3-compatible Backblaze endpoint |
+| **Native B2** | `b2` | Backblaze B2 v2 API over stdlib `net/http` |
+
+The stored backend is used by `upload` and all manual file commands. Switch it permanently with:
+
+```sh
+backuprepo backend b2      # switch to native B2
+backuprepo backend s3      # switch back to S3-compatible
+backuprepo backend         # show current stored backend
+```
+
+Override per-command without changing the stored setting with `--backend`:
+
+```sh
+backuprepo ls photos/ --backend b2
+backuprepo get photos/cat.jpg --backend s3
+```
+
+The default is `s3`, which preserves the original behavior.
+
+---
+
+## Manual bucket commands
+
+These commands let you interact directly with the B2 bucket. They work against whichever backend is active (stored or `--backend` override).
+
+| Command | Description |
+|---------|-------------|
+| `backuprepo ls [path] [-r]` | List bucket contents. Folders shown with trailing `/`. `-r` lists recursively. |
+| `backuprepo get <remote> [local] [-r]` | Download an object to a local path (default: basename). `-r` downloads all objects under a prefix. |
+| `backuprepo put <local> [remote] [-r]` | Upload a local file to a remote key (default: basename). `-r` uploads an entire directory. |
+| `backuprepo rm <path> [-r] [-f]` | Delete an object (or with `-r`, all objects under a prefix). Confirms unless `-f` or `-y`. |
+| `backuprepo find <query> [prefix]` | Case-insensitive substring search of object keys, optionally scoped to a prefix. |
+| `backuprepo backend [s3\|b2]` | Show or set the stored backend. |
+
+Each command also accepts `--backend s3|b2` to override the stored backend for that invocation only.
+
+### Example session
+
+```sh
+# List top-level contents
+backuprepo ls
+
+# List all objects under photos/ (recursive)
+backuprepo ls photos/ -r
+
+# Download a single file
+backuprepo get photos/cat.jpg ./cat.jpg
+
+# Download an entire prefix
+backuprepo get photos/ ./local-photos/ -r
+
+# Upload a single file to a specific key
+backuprepo put ./report.pdf reports/2026/report.pdf
+
+# Upload a whole directory
+backuprepo put ./local-photos/ photos/ -r
+
+# Delete with confirmation prompt
+backuprepo rm old-file.txt
+
+# Delete a prefix without confirmation
+backuprepo rm old-photos/ -r -f
+
+# Search for all objects containing "cat"
+backuprepo find cat
+
+# Search for "cat" only under the photos/ prefix
+backuprepo find cat photos/
+
+# Use native B2 backend for one command
+backuprepo ls --backend b2
+```
+
+---
+
+## B2 configuration — bucket name and bucket ID
+
+Backblaze B2 has two identifiers for every bucket: a human-readable **name** (e.g. `my-backups`) and a numeric **ID** (e.g. `abc123456789`). Starting with the dual-backend release, `backuprepo init` asks for **both**:
+
+- **Bucket name** — used by the S3-compatible API and by the native B2 API for downloads (URL path `/file/<bucket-name>/<key>`).
+- **Bucket ID** — used by the native B2 API for listing and uploads (`b2_list_file_names`, `b2_get_upload_url`).
+
+Both identifiers are available in the Backblaze B2 console under **Buckets**. If you only intend to use the S3-compatible backend you may leave the bucket ID blank, but it is required for `--backend b2`.
+
+`init` now prompts for:
 
 | Prompt | Example value |
 |--------|---------------|
 | Backblaze keyID (access key ID) | `0001abcdef0123456789` |
 | Backblaze applicationKey (secret) | `K001-...` |
 | Bucket name | `my-backups` |
+| Bucket ID (for native B2 API) | `e73ede9969c64827` |
 | S3 endpoint URL | `https://s3.us-west-004.backblazeb2.com` |
 | S3 region | `us-west-004` |
 

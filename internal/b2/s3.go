@@ -16,19 +16,15 @@ import (
 	"backuprepo/internal/apperr"
 )
 
-// multipartPartSize is the part size for the transfer manager. The manager
-// automatically uses a single PutObject for small files and multipart for
-// large ones, satisfying the spec's 100 MB threshold.
 const multipartPartSize = 100 * 1024 * 1024
 
-// S3Uploader uploads to a B2 bucket via the S3-compatible API.
-type S3Uploader struct {
+// S3Backend talks to a B2 bucket via the S3-compatible API.
+type S3Backend struct {
 	client *s3.Client
 	bucket string
 }
 
-// NewS3Uploader builds an S3 client pointed at the B2 endpoint using static creds.
-func NewS3Uploader(ctx context.Context, cfg Config) (*S3Uploader, error) {
+func newS3Backend(ctx context.Context, cfg Config) (*S3Backend, error) {
 	if cfg.KeyID == "" || cfg.AppKey == "" {
 		return nil, apperr.ErrInvalidCredentials
 	}
@@ -44,13 +40,12 @@ func NewS3Uploader(ctx context.Context, cfg Config) (*S3Uploader, error) {
 		if cfg.Endpoint != "" {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 		}
-		o.UsePathStyle = true // B2 S3 works reliably with path-style addressing
+		o.UsePathStyle = true
 	})
-	return &S3Uploader{client: client, bucket: cfg.Bucket}, nil
+	return &S3Backend{client: client, bucket: cfg.BucketName}, nil
 }
 
-// Upload stores r under key, auto-selecting single vs multipart by size.
-func (u *S3Uploader) Upload(ctx context.Context, key string, r io.Reader, size int64) error {
+func (u *S3Backend) Upload(ctx context.Context, key string, r io.Reader, size int64) error {
 	uploader := manager.NewUploader(u.client, func(m *manager.Uploader) {
 		m.PartSize = multipartPartSize
 	})
@@ -65,8 +60,7 @@ func (u *S3Uploader) Upload(ctx context.Context, key string, r io.Reader, size i
 	return nil
 }
 
-// Exists reports whether key is present in the bucket.
-func (u *S3Uploader) Exists(ctx context.Context, key string) (bool, error) {
+func (u *S3Backend) Exists(ctx context.Context, key string) (bool, error) {
 	_, err := u.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(u.bucket),
 		Key:    aws.String(key),
@@ -80,4 +74,99 @@ func (u *S3Uploader) Exists(ctx context.Context, key string) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("%w: head %s: %v", apperr.ErrUploadFailed, key, err)
+}
+
+func (u *S3Backend) Download(ctx context.Context, key string) (io.ReadCloser, int64, error) {
+	out, err := u.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(u.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		var nsk *types.NoSuchKey
+		var nf *types.NotFound
+		if errors.As(err, &nsk) || errors.As(err, &nf) {
+			return nil, 0, fmt.Errorf("%w: %s", apperr.ErrObjectNotFound, key)
+		}
+		return nil, 0, fmt.Errorf("%w: get %s: %v", apperr.ErrDownloadFailed, key, err)
+	}
+	var size int64
+	if out.ContentLength != nil {
+		size = *out.ContentLength
+	}
+	return out.Body, size, nil
+}
+
+func (u *S3Backend) List(ctx context.Context, prefix string, recursive bool) (Listing, error) {
+	var out Listing
+	in := &s3.ListObjectsV2Input{
+		Bucket: aws.String(u.bucket),
+		Prefix: aws.String(prefix),
+	}
+	if !recursive {
+		in.Delimiter = aws.String("/")
+	}
+	p := s3.NewListObjectsV2Paginator(u.client, in)
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return Listing{}, fmt.Errorf("%w: list %s: %v", apperr.ErrListFailed, prefix, err)
+		}
+		for _, obj := range page.Contents {
+			info := ObjectInfo{Key: aws.ToString(obj.Key)}
+			if obj.Size != nil {
+				info.Size = *obj.Size
+			}
+			if obj.LastModified != nil {
+				info.Modified = *obj.LastModified
+			}
+			out.Objects = append(out.Objects, info)
+		}
+		for _, cp := range page.CommonPrefixes {
+			out.Prefixes = append(out.Prefixes, aws.ToString(cp.Prefix))
+		}
+	}
+	return out, nil
+}
+
+func (u *S3Backend) Delete(ctx context.Context, key string) error {
+	// Delete every version if the bucket is versioned; otherwise the single object.
+	vp := s3.NewListObjectVersionsPaginator(u.client, &s3.ListObjectVersionsInput{
+		Bucket: aws.String(u.bucket),
+		Prefix: aws.String(key),
+	})
+	var ids []types.ObjectIdentifier
+	for vp.HasMorePages() {
+		page, err := vp.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("%w: list versions %s: %v", apperr.ErrDeleteFailed, key, err)
+		}
+		for _, v := range page.Versions {
+			if aws.ToString(v.Key) == key {
+				ids = append(ids, types.ObjectIdentifier{Key: v.Key, VersionId: v.VersionId})
+			}
+		}
+		for _, dm := range page.DeleteMarkers {
+			if aws.ToString(dm.Key) == key {
+				ids = append(ids, types.ObjectIdentifier{Key: dm.Key, VersionId: dm.VersionId})
+			}
+		}
+	}
+	if len(ids) == 0 {
+		// Fall back to a plain delete (covers non-versioned buckets that report no versions).
+		_, err := u.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(u.bucket), Key: aws.String(key),
+		})
+		if err != nil {
+			return fmt.Errorf("%w: delete %s: %v", apperr.ErrDeleteFailed, key, err)
+		}
+		return nil
+	}
+	_, err := u.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+		Bucket: aws.String(u.bucket),
+		Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)},
+	})
+	if err != nil {
+		return fmt.Errorf("%w: delete versions %s: %v", apperr.ErrDeleteFailed, key, err)
+	}
+	return nil
 }

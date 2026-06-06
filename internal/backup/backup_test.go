@@ -19,7 +19,7 @@ func key32() []byte {
 	return k
 }
 
-func newSvc(t *testing.T) (*Service, *store.Store, *b2.FakeUploader) {
+func newSvc(t *testing.T) (*Service, *store.Store, *b2.FakeBackend) {
 	t.Helper()
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "b.db"), key32())
 	if err != nil {

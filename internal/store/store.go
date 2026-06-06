@@ -21,11 +21,12 @@ type Store struct {
 	key []byte
 }
 
-// S3Config is the decrypted destination configuration.
-type S3Config struct {
+// RemoteConfig is the decrypted destination configuration for either backend.
+type RemoteConfig struct {
 	Endpoint string
 	Region   string
-	Bucket   string
+	Bucket   string // bucket name (S3 + B2 download-by-name)
+	BucketID string // B2 native list/upload
 	KeyID    string
 	AppKey   string
 }
@@ -44,6 +45,7 @@ const schema = `
 CREATE TABLE IF NOT EXISTS config (
   id           INTEGER PRIMARY KEY CHECK (id = 1),
   s3_endpoint  TEXT, s3_region TEXT, bucket_name TEXT,
+  bucket_id    TEXT, backend TEXT,
   key_id_enc   BLOB, app_key_enc BLOB, created_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS folders (
@@ -64,14 +66,56 @@ func Open(ctx context.Context, path string, key []byte) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("%w: migrate: %v", apperr.ErrStore, err)
 	}
+	if err := migrateConfigColumns(ctx, db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db, key: key}, nil
+}
+
+// migrateConfigColumns adds columns introduced after the initial schema to
+// pre-existing config tables. SQLite has no "ADD COLUMN IF NOT EXISTS".
+func migrateConfigColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(config)`)
+	if err != nil {
+		return fmt.Errorf("%w: table_info: %v", apperr.ErrStore, err)
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return fmt.Errorf("%w: scan column: %v", apperr.ErrStore, err)
+		}
+		have[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("%w: iterate columns: %v", apperr.ErrStore, err)
+	}
+	rows.Close()
+	for _, col := range []struct{ name, ddl string }{
+		{"bucket_id", "ALTER TABLE config ADD COLUMN bucket_id TEXT"},
+		{"backend", "ALTER TABLE config ADD COLUMN backend TEXT"},
+	} {
+		if have[col.name] {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, col.ddl); err != nil {
+			return fmt.Errorf("%w: add column %s: %v", apperr.ErrStore, col.name, err)
+		}
+	}
+	return nil
 }
 
 // Close releases the database handle.
 func (s *Store) Close() error { return s.db.Close() }
 
 // SaveConfig encrypts the credentials and upserts the single config row.
-func (s *Store) SaveConfig(ctx context.Context, cfg S3Config) error {
+func (s *Store) SaveConfig(ctx context.Context, cfg RemoteConfig) error {
 	keyEnc, err := crypto.Seal(s.key, []byte(cfg.KeyID))
 	if err != nil {
 		return err
@@ -81,13 +125,13 @@ func (s *Store) SaveConfig(ctx context.Context, cfg S3Config) error {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO config (id, s3_endpoint, s3_region, bucket_name, key_id_enc, app_key_enc, created_at)
-		VALUES (1, ?, ?, ?, ?, ?, strftime('%s','now'))
+		INSERT INTO config (id, s3_endpoint, s3_region, bucket_name, bucket_id, key_id_enc, app_key_enc, created_at)
+		VALUES (1, ?, ?, ?, ?, ?, ?, strftime('%s','now'))
 		ON CONFLICT(id) DO UPDATE SET
 		  s3_endpoint=excluded.s3_endpoint, s3_region=excluded.s3_region,
-		  bucket_name=excluded.bucket_name, key_id_enc=excluded.key_id_enc,
-		  app_key_enc=excluded.app_key_enc`,
-		cfg.Endpoint, cfg.Region, cfg.Bucket, keyEnc, appEnc)
+		  bucket_name=excluded.bucket_name, bucket_id=excluded.bucket_id,
+		  key_id_enc=excluded.key_id_enc, app_key_enc=excluded.app_key_enc`,
+		cfg.Endpoint, cfg.Region, cfg.Bucket, cfg.BucketID, keyEnc, appEnc)
 	if err != nil {
 		return fmt.Errorf("%w: save config: %v", apperr.ErrStore, err)
 	}
@@ -95,28 +139,61 @@ func (s *Store) SaveConfig(ctx context.Context, cfg S3Config) error {
 }
 
 // GetConfig returns the decrypted config, or ErrNotConfigured if none exists.
-func (s *Store) GetConfig(ctx context.Context) (S3Config, error) {
-	var cfg S3Config
+func (s *Store) GetConfig(ctx context.Context) (RemoteConfig, error) {
+	var cfg RemoteConfig
 	var keyEnc, appEnc []byte
+	var bucketID sql.NullString
 	err := s.db.QueryRowContext(ctx,
-		`SELECT s3_endpoint, s3_region, bucket_name, key_id_enc, app_key_enc FROM config WHERE id=1`).
-		Scan(&cfg.Endpoint, &cfg.Region, &cfg.Bucket, &keyEnc, &appEnc)
+		`SELECT s3_endpoint, s3_region, bucket_name, bucket_id, key_id_enc, app_key_enc FROM config WHERE id=1`).
+		Scan(&cfg.Endpoint, &cfg.Region, &cfg.Bucket, &bucketID, &keyEnc, &appEnc)
 	if errors.Is(err, sql.ErrNoRows) {
-		return S3Config{}, apperr.ErrNotConfigured
+		return RemoteConfig{}, apperr.ErrNotConfigured
 	}
 	if err != nil {
-		return S3Config{}, fmt.Errorf("%w: get config: %v", apperr.ErrStore, err)
+		return RemoteConfig{}, fmt.Errorf("%w: get config: %v", apperr.ErrStore, err)
 	}
+	cfg.BucketID = bucketID.String
 	keyID, err := crypto.Open(s.key, keyEnc)
 	if err != nil {
-		return S3Config{}, err
+		return RemoteConfig{}, err
 	}
 	appKey, err := crypto.Open(s.key, appEnc)
 	if err != nil {
-		return S3Config{}, err
+		return RemoteConfig{}, err
 	}
 	cfg.KeyID, cfg.AppKey = string(keyID), string(appKey)
 	return cfg, nil
+}
+
+// GetBackend returns the stored backend kind, defaulting to "s3".
+func (s *Store) GetBackend(ctx context.Context) (string, error) {
+	var backend sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT backend FROM config WHERE id=1`).Scan(&backend)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "s3", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("%w: get backend: %v", apperr.ErrStore, err)
+	}
+	if !backend.Valid || backend.String == "" {
+		return "s3", nil
+	}
+	return backend.String, nil
+}
+
+// SetBackend persists the backend kind ("s3" or "b2"). Requires existing config.
+func (s *Store) SetBackend(ctx context.Context, kind string) error {
+	if kind != "s3" && kind != "b2" {
+		return apperr.ErrInvalidBackend
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE config SET backend=? WHERE id=1`, kind)
+	if err != nil {
+		return fmt.Errorf("%w: set backend: %v", apperr.ErrStore, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperr.ErrNotConfigured
+	}
+	return nil
 }
 
 // IsConfigured reports whether a config row exists.
