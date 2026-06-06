@@ -123,6 +123,36 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		}
 		w.Write(data)
 	})
+	mux.HandleFunc("/b2api/v2/b2_start_large_file", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			FileName string `json:"fileName"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		json.NewEncoder(w).Encode(map[string]any{"fileId": "large-" + req.FileName, "fileName": req.FileName})
+	})
+	mux.HandleFunc("/b2api/v2/b2_get_upload_part_url", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"uploadUrl": base + "/uploadpart", "authorizationToken": "part-token"})
+	})
+	largeParts := map[string][][]byte{}
+	mux.HandleFunc("/uploadpart", func(w http.ResponseWriter, r *http.Request) {
+		fileID := r.Header.Get("X-Bz-Part-File-Id")
+		body, _ := io.ReadAll(r.Body)
+		largeParts[fileID] = append(largeParts[fileID], body)
+		json.NewEncoder(w).Encode(map[string]any{"partNumber": len(largeParts[fileID])})
+	})
+	mux.HandleFunc("/b2api/v2/b2_finish_large_file", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			FileID string `json:"fileId"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		name := strings.TrimPrefix(req.FileID, "large-")
+		var full []byte
+		for _, p := range largeParts[req.FileID] {
+			full = append(full, p...)
+		}
+		store[name] = full
+		json.NewEncoder(w).Encode(map[string]any{"fileName": name, "fileId": req.FileID})
+	})
 
 	srv := httptest.NewServer(mux)
 	base = srv.URL
@@ -192,14 +222,30 @@ func TestB2ListAndDelete(t *testing.T) {
 	}
 }
 
-func TestB2LargeFileNotYetImplemented(t *testing.T) {
-	srv := b2TestServer(t, map[string][]byte{})
+func TestB2LargeFileUpload(t *testing.T) {
+	store := map[string][]byte{}
+	srv := b2TestServer(t, store)
 	b := testB2(t, srv)
-	big := bytes.NewReader(make([]byte, 1)) // size arg drives the branch
-	err := b.Upload(context.Background(), "big.bin", big, b2SmallFileLimit+1)
-	if !errors.Is(err, apperr.ErrUploadFailed) {
-		t.Fatalf("want ErrUploadFailed for oversize, got %v", err)
+	b.partSize = 5 // tiny parts so a small payload exercises the multipart path
+	ctx := context.Background()
+
+	payload := []byte("abcdefghijklmnop") // 16 bytes → 4 parts of 5,5,5,1
+	err := b.uploadLarge(ctx, mustAuth(t, b, ctx), "big.bin", bytes.NewReader(payload), int64(len(payload)))
+	if err != nil {
+		t.Fatalf("uploadLarge: %v", err)
 	}
+	if string(store["big.bin"]) != string(payload) {
+		t.Fatalf("reassembled = %q want %q", store["big.bin"], payload)
+	}
+}
+
+func mustAuth(t *testing.T, b *B2Backend, ctx context.Context) *b2Auth {
+	t.Helper()
+	a, err := b.authorize(ctx)
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	return a
 }
 
 func TestB2ListNonRecursiveGroupsFolders(t *testing.T) {

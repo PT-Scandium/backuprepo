@@ -24,10 +24,11 @@ const defaultB2AuthURL = "https://api.backblazeb2.com"
 
 // B2Backend talks to Backblaze via the native B2 v2 API.
 type B2Backend struct {
-	cfg     Config
-	http    *http.Client
-	authURL string
-	auth    *b2Auth
+	cfg      Config
+	http     *http.Client
+	authURL  string
+	auth     *b2Auth
+	partSize int64
 }
 
 type b2Auth struct {
@@ -38,7 +39,7 @@ type b2Auth struct {
 }
 
 func newB2Backend(cfg Config) *B2Backend {
-	return &B2Backend{cfg: cfg, http: http.DefaultClient, authURL: defaultB2AuthURL}
+	return &B2Backend{cfg: cfg, http: http.DefaultClient, authURL: defaultB2AuthURL, partSize: b2SmallFileLimit}
 }
 
 // authorize fetches and caches an auth context.
