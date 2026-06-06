@@ -57,8 +57,7 @@ func NewBackend(ctx context.Context, kind string, cfg Config) (Backend, error) {
 	case "", "s3":
 		return newS3Backend(ctx, cfg)
 	case "b2":
-		// TODO(Task 4): replace with newB2Backend(cfg) once native.go is implemented.
-		return nil, apperr.ErrInvalidBackend
+		return newB2Backend(cfg), nil
 	default:
 		return nil, apperr.ErrInvalidBackend
 	}
