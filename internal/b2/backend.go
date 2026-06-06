@@ -1,0 +1,65 @@
+// Package b2 stores and retrieves objects in a Backblaze B2 bucket, via either
+// the S3-compatible API (S3Backend) or the native B2 API (B2Backend). Backend
+// is the abstraction manual file commands depend on; Uploader is the narrower
+// view the backup flow needs. FakeBackend backs tests.
+package b2
+
+import (
+	"context"
+	"io"
+	"time"
+
+	"backuprepo/internal/apperr"
+)
+
+// ObjectInfo describes one stored object.
+type ObjectInfo struct {
+	Key      string
+	Size     int64
+	Modified time.Time
+}
+
+// Listing is the result of List: files directly under a prefix, plus "folder"
+// prefixes (common prefixes) when not listing recursively.
+type Listing struct {
+	Objects  []ObjectInfo
+	Prefixes []string
+}
+
+// Uploader is the narrow write view the backup flow depends on.
+type Uploader interface {
+	Upload(ctx context.Context, key string, r io.Reader, size int64) error
+	Exists(ctx context.Context, key string) (bool, error)
+}
+
+// Backend is the full bucket interface used by the manual file commands.
+type Backend interface {
+	Uploader
+	Download(ctx context.Context, key string) (io.ReadCloser, int64, error)
+	List(ctx context.Context, prefix string, recursive bool) (Listing, error)
+	Delete(ctx context.Context, key string) error
+}
+
+// Config carries everything both backends need. BucketName is used by the S3
+// API and by B2 download-by-name; BucketID is used by the B2 native list/upload.
+type Config struct {
+	Endpoint   string
+	Region     string
+	BucketName string
+	BucketID   string
+	KeyID      string
+	AppKey     string
+}
+
+// NewBackend builds the backend for kind ("s3" or "b2").
+func NewBackend(ctx context.Context, kind string, cfg Config) (Backend, error) {
+	switch kind {
+	case "", "s3":
+		return newS3Backend(ctx, cfg)
+	case "b2":
+		// TODO(Task 4): replace with newB2Backend(cfg) once native.go is implemented.
+		return nil, apperr.ErrInvalidBackend
+	default:
+		return nil, apperr.ErrInvalidBackend
+	}
+}

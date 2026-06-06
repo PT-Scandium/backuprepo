@@ -74,8 +74,8 @@ func runUpload(ctx context.Context, st *store.Store) error {
 	if err != nil {
 		return err
 	}
-	up, err := b2.NewS3Uploader(ctx, b2.Config{
-		Endpoint: cfg.Endpoint, Region: cfg.Region, Bucket: cfg.Bucket,
+	up, err := b2.NewBackend(ctx, "s3", b2.Config{
+		Endpoint: cfg.Endpoint, Region: cfg.Region, BucketName: cfg.Bucket,
 		KeyID: cfg.KeyID, AppKey: cfg.AppKey,
 	})
 	if err != nil {
