@@ -7,6 +7,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"backuprepo/internal/apperr"
@@ -186,23 +187,58 @@ func buildBackend(ctx context.Context, st *store.Store, override string) (b2.Bac
 	})
 }
 
-func usage(w *os.File) {
-	fmt.Fprint(w, `backuprepo - back up watched folders to Backblaze B2
+func usage(w io.Writer) {
+	fmt.Fprint(w, `backuprepo — back up folders to Backblaze B2 (S3-compatible or native B2 API)
 
-Usage:
-  backuprepo init                 Interactive setup (credentials, bucket, folder)
-  backuprepo watch /path/to/dir   Add a folder to the watch list
-  backuprepo unwatch /path/to/dir Remove a folder from the watch list
-  backuprepo list                 List watched folders and tracked files
-  backuprepo status               Show configuration and pending uploads
-  backuprepo upload               Upload all changed files now
-  backuprepo config               Show current configuration (secret masked)
-  backuprepo ls [path] [-r]       List bucket contents (folders shown with trailing /)
-  backuprepo get <remote> [local] [-r]   Download an object or (with -r) a folder
-  backuprepo put <local> [remote] [-r]   Upload a file or (with -r) a directory
-  backuprepo rm <path> [-r] [-f]  Delete an object/folder (confirms unless -f)
-  backuprepo find <query> [prefix]  Search object names (substring, case-insensitive)
-  backuprepo backend [s3|b2]      Show or set the storage backend
+USAGE
+  backuprepo <command> [args] [flags]
+  (no command = status)
+
+SETUP
+  init                       Interactive setup: credentials, bucket name, bucket ID, endpoint, region, first folder
+  config                     Show current configuration (app key masked) + active backend
+
+BACKUP  (watch local folders, upload changed files)
+  watch <dir>                Add a folder to the watch list
+  unwatch <dir>              Remove a folder from the watch list
+  list                       List watched folders + tracked files (last-backup times)
+  status                     Configured? backend, watched folders, pending uploads
+  upload                     Upload all changed files now (no-op if nothing changed)
+
+STORAGE BACKEND  (mode — applies to upload and all file operations)
+  backend [s3|b2]            Show or set the backend. Default: s3
+                               s3 = S3-compatible API (aws-sdk)    b2 = native Backblaze B2 API
+                             Override for one command with  --backend s3|b2
+
+MANUAL FILE OPERATIONS  (act directly on the bucket)
+  ls [path] [-r]             List bucket contents (folders shown with trailing /)
+  get <remote> [local] [-r]  Download an object, or a folder with -r
+  put <local> [remote] [-r]  Upload a file, or a directory with -r
+  rm <path> [-r] [-f]        Delete an object/folder (confirms unless -f/-y)
+  find <query> [prefix]      Case-insensitive substring search of object names
+
+FLAGS
+  --backend s3|b2            override the backend for one command
+  -r                         recursive (ls / get / put / rm)
+  -f, -y                     skip the rm confirmation prompt
+
+EXAMPLES
+  # First run + backup (default S3 mode)
+  backuprepo init
+  backuprepo watch ~/Documents
+  backuprepo upload
+
+  # Native Backblaze B2 mode + manual file management
+  backuprepo backend b2
+  backuprepo ls -r
+  backuprepo put ./report.pdf reports/report.pdf
+  backuprepo get reports/report.pdf ./out.pdf
+  backuprepo find report
+  backuprepo rm reports/ -r
+  # one-off override without changing the stored mode:
+  backuprepo ls --backend s3
+
+State: ~/backup_repo/ (backup.db, key).   Exit codes: 0 ok, 1 error (message on stderr).   Docs: README.md
 `)
 }
 
