@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -40,7 +41,7 @@ func TestGetConfigNotConfigured(t *testing.T) {
 func TestSaveAndGetConfigRoundTrip(t *testing.T) {
 	st, _ := openTest(t)
 	ctx := context.Background()
-	in := S3Config{
+	in := RemoteConfig{
 		Endpoint: "https://s3.us-west-004.backblazeb2.com",
 		Region:   "us-west-004",
 		Bucket:   "my-bucket",
@@ -62,7 +63,7 @@ func TestSaveAndGetConfigRoundTrip(t *testing.T) {
 func TestConfigEncryptedAtRest(t *testing.T) {
 	st, path := openTest(t)
 	ctx := context.Background()
-	in := S3Config{Bucket: "b", KeyID: "PLAINTEXT_KEY_ID", AppKey: "PLAINTEXT_SECRET"}
+	in := RemoteConfig{Bucket: "b", KeyID: "PLAINTEXT_KEY_ID", AppKey: "PLAINTEXT_SECRET"}
 	if err := st.SaveConfig(ctx, in); err != nil {
 		t.Fatalf("SaveConfig: %v", err)
 	}
@@ -114,5 +115,78 @@ func TestFileUpsertAndGet(t *testing.T) {
 	}
 	if got.Size != 10 || got.SHA256 != "abc" || got.LastBackup == nil || *got.LastBackup != 123 {
 		t.Fatalf("record mismatch: %+v", got)
+	}
+}
+
+func TestConfigRoundTripWithBucketIDAndBackend(t *testing.T) {
+	st, _ := openTest(t)
+	ctx := context.Background()
+	in := RemoteConfig{
+		Endpoint: "https://s3.us-west-004.backblazeb2.com",
+		Region:   "us-west-004",
+		Bucket:   "my-bucket",
+		BucketID: "abc123",
+		KeyID:    "0001abcd",
+		AppKey:   "K001-secret",
+	}
+	if err := st.SaveConfig(ctx, in); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	got, err := st.GetConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	if got != in {
+		t.Fatalf("round-trip mismatch:\n got %+v\nwant %+v", got, in)
+	}
+}
+
+func TestBackendDefaultsToS3AndCanBeSet(t *testing.T) {
+	st, _ := openTest(t)
+	ctx := context.Background()
+	got, err := st.GetBackend(ctx)
+	if err != nil {
+		t.Fatalf("GetBackend: %v", err)
+	}
+	if got != "s3" {
+		t.Fatalf("default backend = %q, want s3", got)
+	}
+	if err := st.SetBackend(ctx, "b2"); err != nil {
+		t.Fatalf("SetBackend: %v", err)
+	}
+	got, _ = st.GetBackend(ctx)
+	if got != "b2" {
+		t.Fatalf("backend after set = %q, want b2", got)
+	}
+	if err := st.SetBackend(ctx, "azure"); !errors.Is(err, apperr.ErrInvalidBackend) {
+		t.Fatalf("want ErrInvalidBackend, got %v", err)
+	}
+}
+
+func TestOpenMigratesOldSchema(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	// Create a DB with the OLD config schema (no bucket_id / backend columns).
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.ExecContext(ctx, `CREATE TABLE config (
+		id INTEGER PRIMARY KEY CHECK (id=1),
+		s3_endpoint TEXT, s3_region TEXT, bucket_name TEXT,
+		key_id_enc BLOB, app_key_enc BLOB, created_at INTEGER);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	// Opening through the store must add the missing columns and work normally.
+	st, err := Open(ctx, path, key32())
+	if err != nil {
+		t.Fatalf("Open (migrate): %v", err)
+	}
+	defer st.Close()
+	if b, err := st.GetBackend(ctx); err != nil || b != "s3" {
+		t.Fatalf("GetBackend after migrate = %q, %v", b, err)
 	}
 }

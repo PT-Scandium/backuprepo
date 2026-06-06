@@ -28,10 +28,11 @@ func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer) err
 		return strings.TrimSpace(line)
 	}
 
-	cfg := store.S3Config{
+	cfg := store.RemoteConfig{
 		KeyID:    ask("Backblaze keyID (access key ID)"),
 		AppKey:   ask("Backblaze applicationKey (secret)"),
 		Bucket:   ask("Bucket name"),
+		BucketID: ask("Bucket ID (for native B2 API)"),
 		Endpoint: ask("S3 endpoint URL (e.g. https://s3.us-west-004.backblazeb2.com)"),
 		Region:   ask("S3 region (e.g. us-west-004)"),
 	}
@@ -123,8 +124,12 @@ func Status(ctx context.Context, st *store.Store, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Status: configured\nWatched folders: %d\nPending uploads: %d\n",
-		len(folders), pending)
+	backend, err := st.GetBackend(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Status: configured\nBackend: %s\nWatched folders: %d\nPending uploads: %d\n",
+		backend, len(folders), pending)
 	return nil
 }
 
@@ -137,6 +142,12 @@ func Config(ctx context.Context, st *store.Store, out io.Writer) error {
 	fmt.Fprintf(out, "Endpoint:    %s\n", cfg.Endpoint)
 	fmt.Fprintf(out, "Region:      %s\n", cfg.Region)
 	fmt.Fprintf(out, "Bucket:      %s\n", cfg.Bucket)
+	fmt.Fprintf(out, "Bucket ID:   %s\n", cfg.BucketID)
+	backend, err := st.GetBackend(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Backend:     %s\n", backend)
 	fmt.Fprintf(out, "Key ID:      %s\n", cfg.KeyID)
 	fmt.Fprintf(out, "App Key:     %s\n", mask(cfg.AppKey))
 	folders, err := st.ListFolders(ctx)
