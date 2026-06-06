@@ -46,7 +46,9 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 	})
 	mux.HandleFunc("/b2api/v2/b2_list_file_names", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			Prefix, Delimiter, StartFileName string
+			Prefix        string `json:"prefix"`
+			Delimiter     string `json:"delimiter"`
+			StartFileName string `json:"startFileName"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		type f struct {
@@ -56,9 +58,32 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 			Action          string `json:"action"`
 		}
 		var files []f
-		for name, data := range store {
-			if strings.HasPrefix(name, req.Prefix) {
-				files = append(files, f{FileName: name, ContentLength: int64(len(data)), Action: "upload"})
+		if req.Delimiter == "/" {
+			// Emulate B2 folder-grouping: emit synthetic folder entries for keys
+			// whose remainder (after the prefix) contains a "/", deduplicated.
+			seen := map[string]bool{}
+			for name, data := range store {
+				if !strings.HasPrefix(name, req.Prefix) {
+					continue
+				}
+				rest := strings.TrimPrefix(name, req.Prefix)
+				if idx := strings.Index(rest, "/"); idx >= 0 {
+					// This key lives under a sub-folder; emit a folder entry.
+					folder := req.Prefix + rest[:idx+1]
+					if !seen[folder] {
+						seen[folder] = true
+						files = append(files, f{FileName: folder, ContentLength: 0, Action: "folder"})
+					}
+				} else {
+					// Top-level file under prefix; emit as normal.
+					files = append(files, f{FileName: name, ContentLength: int64(len(data)), Action: "upload"})
+				}
+			}
+		} else {
+			for name, data := range store {
+				if strings.HasPrefix(name, req.Prefix) {
+					files = append(files, f{FileName: name, ContentLength: int64(len(data)), Action: "upload"})
+				}
 			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"files": files, "nextFileName": nil})
@@ -174,6 +199,44 @@ func TestB2LargeFileNotYetImplemented(t *testing.T) {
 	err := b.Upload(context.Background(), "big.bin", big, b2SmallFileLimit+1)
 	if !errors.Is(err, apperr.ErrUploadFailed) {
 		t.Fatalf("want ErrUploadFailed for oversize, got %v", err)
+	}
+}
+
+func TestB2ListNonRecursiveGroupsFolders(t *testing.T) {
+	store := map[string][]byte{
+		"a.txt":            []byte("1"),
+		"photos/1.jpg":     []byte("2"),
+		"photos/2.jpg":     []byte("3"),
+		"photos/sub/3.jpg": []byte("4"),
+	}
+	srv := b2TestServer(t, store)
+	b := testB2(t, srv)
+	ctx := context.Background()
+
+	l, err := b.List(ctx, "", false)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(l.Objects) != 1 || l.Objects[0].Key != "a.txt" {
+		t.Fatalf("objects = %+v, want [a.txt]", l.Objects)
+	}
+	if len(l.Prefixes) != 1 || l.Prefixes[0] != "photos/" {
+		t.Fatalf("prefixes = %+v, want [photos/]", l.Prefixes)
+	}
+}
+
+func TestB2AuthRejectsEmptyCreds(t *testing.T) {
+	store := map[string][]byte{}
+	srv := b2TestServer(t, store)
+	b := newB2Backend(Config{}) // empty KeyID and AppKey
+	b.authURL = srv.URL
+	b.http = srv.Client()
+	ctx := context.Background()
+
+	// List is a representative operation that triggers authorize().
+	_, err := b.List(ctx, "", false)
+	if !errors.Is(err, apperr.ErrInvalidCredentials) {
+		t.Fatalf("want ErrInvalidCredentials, got %v", err)
 	}
 }
 
