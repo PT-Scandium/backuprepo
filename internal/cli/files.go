@@ -12,6 +12,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"backuprepo/internal/apperr"
 	"backuprepo/internal/b2"
 	"backuprepo/internal/store"
 )
@@ -20,6 +21,16 @@ import (
 // no leading slash).
 func remoteKey(p string) string {
 	return strings.TrimPrefix(filepath.ToSlash(p), "/")
+}
+
+// underBase reports whether dest is within base (prevents path traversal from
+// server-supplied keys).
+func underBase(base, dest string) bool {
+	rel, err := filepath.Rel(base, dest)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // Ls lists a prefix. Folders (common prefixes) are shown with a trailing slash.
@@ -40,7 +51,9 @@ func Ls(ctx context.Context, be b2.Backend, path string, recursive bool, out io.
 	for _, o := range l.Objects {
 		fmt.Fprintf(tw, "%s\t%d\n", o.Key, o.Size)
 	}
-	tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
 	if len(l.Prefixes) == 0 && len(l.Objects) == 0 {
 		fmt.Fprintln(out, "(empty)")
 	}
@@ -85,6 +98,9 @@ func Get(ctx context.Context, be b2.Backend, remote, local string, recursive boo
 		for _, o := range l.Objects {
 			rel := strings.TrimPrefix(o.Key, prefix)
 			dest := filepath.Join(base, filepath.FromSlash(rel))
+			if !underBase(base, dest) {
+				return fmt.Errorf("%w: refusing to write outside %s: %s", apperr.ErrDownloadFailed, base, o.Key)
+			}
 			if err := downloadTo(ctx, be, o.Key, dest); err != nil {
 				return err
 			}

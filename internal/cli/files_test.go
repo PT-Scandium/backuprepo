@@ -3,11 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"backuprepo/internal/apperr"
 	"backuprepo/internal/b2"
 	"backuprepo/internal/store"
 )
@@ -131,5 +133,58 @@ func saveMinimalConfig(t *testing.T, st *store.Store) {
 	})
 	if err != nil {
 		t.Fatalf("SaveConfig: %v", err)
+	}
+}
+
+func TestGetRecursivePreservesStructure(t *testing.T) {
+	ctx := context.Background()
+	be := seedBackend(ctx, "docs/a.txt", "docs/sub/b.txt")
+	tmpDir := t.TempDir()
+	var out bytes.Buffer
+	if err := Get(ctx, be, "docs/", tmpDir, true, &out); err != nil {
+		t.Fatalf("Get recursive: %v", err)
+	}
+	cases := []struct {
+		rel  string
+		want string
+	}{
+		{"a.txt", "data-docs/a.txt"},
+		{filepath.Join("sub", "b.txt"), "data-docs/sub/b.txt"},
+	}
+	for _, c := range cases {
+		path := filepath.Join(tmpDir, c.rel)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", path, err)
+		}
+		if string(data) != c.want {
+			t.Fatalf("file %s: got %q, want %q", c.rel, data, c.want)
+		}
+	}
+}
+
+func TestGetRejectsTraversal(t *testing.T) {
+	ctx := context.Background()
+	be := b2.NewFake()
+	be.Objects["../escape.txt"] = []byte("x")
+	tmpDir := t.TempDir()
+	var out bytes.Buffer
+	err := Get(ctx, be, "", tmpDir, true, &out)
+	if err == nil {
+		t.Fatal("expected error for path traversal, got nil")
+	}
+	if !errors.Is(err, apperr.ErrDownloadFailed) {
+		t.Fatalf("expected ErrDownloadFailed, got: %v", err)
+	}
+}
+
+func TestPutDirWithoutRecursiveErrors(t *testing.T) {
+	ctx := context.Background()
+	be := b2.NewFake()
+	tmpDir := t.TempDir()
+	var out bytes.Buffer
+	err := Put(ctx, be, tmpDir, "remote", false, &out)
+	if err == nil {
+		t.Fatal("expected error when putting directory without -r, got nil")
 	}
 }
