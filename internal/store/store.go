@@ -92,6 +92,10 @@ func migrateConfigColumns(ctx context.Context, db *sql.DB) error {
 		}
 		have[name] = true
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("%w: iterate columns: %v", apperr.ErrStore, err)
+	}
 	rows.Close()
 	for _, col := range []struct{ name, ddl string }{
 		{"bucket_id", "ALTER TABLE config ADD COLUMN bucket_id TEXT"},
@@ -165,25 +169,29 @@ func (s *Store) GetConfig(ctx context.Context) (RemoteConfig, error) {
 func (s *Store) GetBackend(ctx context.Context) (string, error) {
 	var backend sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT backend FROM config WHERE id=1`).Scan(&backend)
-	if errors.Is(err, sql.ErrNoRows) || !backend.Valid || backend.String == "" {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "s3", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("%w: get backend: %v", apperr.ErrStore, err)
 	}
+	if !backend.Valid || backend.String == "" {
+		return "s3", nil
+	}
 	return backend.String, nil
 }
 
-// SetBackend persists the backend kind ("s3" or "b2").
+// SetBackend persists the backend kind ("s3" or "b2"). Requires existing config.
 func (s *Store) SetBackend(ctx context.Context, kind string) error {
 	if kind != "s3" && kind != "b2" {
 		return apperr.ErrInvalidBackend
 	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO config (id, backend) VALUES (1, ?)
-		 ON CONFLICT(id) DO UPDATE SET backend=excluded.backend`, kind)
+	res, err := s.db.ExecContext(ctx, `UPDATE config SET backend=? WHERE id=1`, kind)
 	if err != nil {
 		return fmt.Errorf("%w: set backend: %v", apperr.ErrStore, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperr.ErrNotConfigured
 	}
 	return nil
 }

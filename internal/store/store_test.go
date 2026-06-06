@@ -151,6 +151,10 @@ func TestBackendDefaultsToS3AndCanBeSet(t *testing.T) {
 	if got != "s3" {
 		t.Fatalf("default backend = %q, want s3", got)
 	}
+	// SetBackend requires an existing config row.
+	if err := st.SaveConfig(ctx, RemoteConfig{Bucket: "b", KeyID: "k", AppKey: "a"}); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
 	if err := st.SetBackend(ctx, "b2"); err != nil {
 		t.Fatalf("SetBackend: %v", err)
 	}
