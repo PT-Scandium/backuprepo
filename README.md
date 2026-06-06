@@ -14,7 +14,7 @@ Requires Go 1.25+. No CGO — uses pure-Go SQLite (`modernc.org/sqlite`).
 go build -ldflags="-s -w" -o backuprepo .
 ```
 
-The stripped binary is approximately **14 MB** (aws-sdk-go-v2 + modernc.org/sqlite account for most of the size; below the <10 MB original target but noted for future trimming).
+The stripped binary is approximately **14 MB** (aws-sdk-go-v2 + modernc.org/sqlite account for most of the size; this is **above** the <10 MB original target and is noted for future trimming).
 
 ---
 

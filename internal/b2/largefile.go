@@ -80,7 +80,6 @@ func (b *B2Backend) uploadPart(ctx context.Context, auth *b2Auth, fileID string,
 	req.Header.Set("X-Bz-Part-Number", strconv.Itoa(num))
 	req.Header.Set("X-Bz-Content-Sha1", sha)
 	req.Header.Set("Content-Length", strconv.Itoa(len(data)))
-	req.Header.Set("X-Bz-Part-File-Id", fileID) // test-stub grouping; harmless to real B2
 	resp, err := b.http.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("%w: upload part %d: %v", apperr.ErrUploadFailed, num, err)

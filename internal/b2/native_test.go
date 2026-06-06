@@ -131,11 +131,15 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		json.NewEncoder(w).Encode(map[string]any{"fileId": "large-" + req.FileName, "fileName": req.FileName})
 	})
 	mux.HandleFunc("/b2api/v2/b2_get_upload_part_url", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"uploadUrl": base + "/uploadpart", "authorizationToken": "part-token"})
+		var req struct {
+			FileId string `json:"fileId"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		json.NewEncoder(w).Encode(map[string]any{"uploadUrl": base + "/uploadpart?fileId=" + req.FileId, "authorizationToken": "part-token"})
 	})
 	largeParts := map[string][][]byte{}
 	mux.HandleFunc("/uploadpart", func(w http.ResponseWriter, r *http.Request) {
-		fileID := r.Header.Get("X-Bz-Part-File-Id")
+		fileID := r.URL.Query().Get("fileId")
 		body, _ := io.ReadAll(r.Body)
 		largeParts[fileID] = append(largeParts[fileID], body)
 		json.NewEncoder(w).Encode(map[string]any{"partNumber": len(largeParts[fileID])})
