@@ -103,3 +103,47 @@ func TestStatusNotConfigured(t *testing.T) {
 		t.Fatalf("status should report not configured: %q", out.String())
 	}
 }
+
+func TestBucketSwitchKeepsCredentials(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	if err := st.SaveConfig(ctx, store.RemoteConfig{
+		KeyID: "k", AppKey: "secret", Bucket: "old-bucket", BucketID: "old-id",
+		Endpoint: "https://e", Region: "r",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := Bucket(ctx, st, "new-bucket", "new-id", &out); err != nil {
+		t.Fatalf("Bucket set: %v", err)
+	}
+	cfg, err := st.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Bucket != "new-bucket" || cfg.BucketID != "new-id" {
+		t.Fatalf("bucket not switched: %s / %s", cfg.Bucket, cfg.BucketID)
+	}
+	// Credentials, endpoint, region must be untouched.
+	if cfg.KeyID != "k" || cfg.AppKey != "secret" || cfg.Endpoint != "https://e" || cfg.Region != "r" {
+		t.Fatalf("non-bucket fields changed: %+v", cfg)
+	}
+
+	// No-arg form shows the current bucket.
+	out.Reset()
+	if err := Bucket(ctx, st, "", "", &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "new-bucket") || !strings.Contains(out.String(), "new-id") {
+		t.Fatalf("show missing bucket/id: %q", out.String())
+	}
+}
+
+func TestBucketSetRequiresConfig(t *testing.T) {
+	st := newStore(t)
+	err := Bucket(context.Background(), st, "b", "i", &bytes.Buffer{})
+	if !errors.Is(err, apperr.ErrNotConfigured) {
+		t.Fatalf("want ErrNotConfigured, got %v", err)
+	}
+}

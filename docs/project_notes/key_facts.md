@@ -62,12 +62,12 @@ Available once configured; all accept `--backend s3|b2`:
 - `apperr` — typed sentinel errors (imported by all packages)
 - `crypto` — AES-256-GCM `Seal`/`Open`
 - `config` — `~/backup_repo` paths + master-key file
-- `store` — SQLite persistence (encrypted creds, folders, files, backend mode)
+- `store` — SQLite persistence (encrypted creds, folders, files, backend mode); `SetBucket` switches the destination bucket name + ID without touching credentials
 - `b2` — `Backend` interface (embeds `Uploader`), `S3Backend`, `B2Backend`, `FakeBackend`; `NewBackend` factory
 - `backup` — folder walk + change detection + upload orchestration (depends on `b2.Uploader`; optional `b2.Deleter` via `WithDeleter` enables opt-in deletion propagation)
 - `daemon` — background watcher (built 2026-06-16): recursive fsnotify watch + 5-min fallback scan + 1s/5s debounce; `start`/`stop` lifecycle (PID file `~/backup_repo/daemon.pid`, graceful shutdown). Depends on `store` + `b2.Uploader` via `backup.Service`.
-- `cli` — subcommand handlers incl. `Ls`/`Get`/`Put`/`Rm`/`Find`/`Backend` + `Start`/`Stop` (io injected for testability)
-- root `main.go` — dispatch (incl. `start`/`stop`) + per-command FlagSet + effective-backend factory
+- `cli` — subcommand handlers incl. `Ls`/`Get`/`Put`/`Rm`/`Find`/`Backend`/`Bucket` + `Start`/`Stop` (io injected for testability)
+- root `main.go` — dispatch (incl. `start`/`stop`/`bucket`) + per-command FlagSet + effective-backend factory
 
 ### Reference docs
 

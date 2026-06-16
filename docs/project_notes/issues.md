@@ -64,6 +64,15 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   - Tests: disabled-by-default, removes-remote+record (keeps others), skips-missing-folder.
 - **Notes**: Opt-in only — default still retains backups. Versioned-bucket deletes purge all versions (irreversible). Daemon deletion uses scan reconciliation, not fsnotify `Remove` events. `unwatch`ed folders' objects persist by design.
 
+### 2026-06-16 - `bucket` command: switch buckets without full re-init
+- **Status**: Implemented on branch `feat/set-bucket` (off `master`). `go test ./...` green; vet/gofmt clean.
+- **Description**: Added `bb bucket [<name> [<id>]]` to change the destination bucket without re-running `init` (which re-prompts for credentials/endpoint/region):
+  - `store.SetBucket(name, id)` updates only `bucket_name` + `bucket_id` (requires existing config; empty id clears it for S3-only buckets).
+  - `cli.Bucket` — no args shows the current bucket; `<name> [<id>]` switches. Mirrors the `backend [s3|b2]` show/set pattern.
+  - `main.go` dispatch (`case "bucket"`, ≤2 positionals) + `usage` SETUP entry.
+  - Tests: switch keeps credentials/endpoint/region intact + no-arg show; set without config → `ErrNotConfigured`.
+- **Notes**: Bucket-only change — the stored key must already have access to the new bucket. A bucket-scoped key (see security note) won't authorize a different bucket; for that, re-run `init`. No new ADR (operates within ADR-010's name+ID model). Merged after the daemon PR (#4); see PR #5.
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).

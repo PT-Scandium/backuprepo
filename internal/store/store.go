@@ -196,6 +196,20 @@ func (s *Store) SetBackend(ctx context.Context, kind string) error {
 	return nil
 }
 
+// SetBucket updates the destination bucket name and ID, leaving credentials,
+// endpoint, region, and backend untouched. An empty id is allowed (S3-only
+// buckets don't need a bucket ID). Requires existing config.
+func (s *Store) SetBucket(ctx context.Context, name, id string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE config SET bucket_name=?, bucket_id=? WHERE id=1`, name, id)
+	if err != nil {
+		return fmt.Errorf("%w: set bucket: %v", apperr.ErrStore, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperr.ErrNotConfigured
+	}
+	return nil
+}
+
 // IsConfigured reports whether a config row exists.
 func (s *Store) IsConfigured(ctx context.Context) (bool, error) {
 	var n int
