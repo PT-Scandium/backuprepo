@@ -41,6 +41,7 @@ type b2Auth struct {
 	RecommendedPartSize int64
 }
 
+// newB2Backend builds a native B2 backend with the default auth URL and part size.
 func newB2Backend(cfg Config) *B2Backend {
 	return &B2Backend{cfg: cfg, http: http.DefaultClient, authURL: defaultB2AuthURL, partSize: b2SmallFileLimit}
 }
@@ -360,6 +361,7 @@ func urlEncodeSegment(s string) string {
 	return b.String()
 }
 
+// msToTime converts a B2 millisecond timestamp to time.Time; 0 yields the zero time.
 func msToTime(ms int64) time.Time {
 	if ms == 0 {
 		return time.Time{}

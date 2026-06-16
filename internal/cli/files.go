@@ -119,6 +119,7 @@ func Get(ctx context.Context, be b2.Backend, remote, local string, recursive boo
 	return nil
 }
 
+// downloadTo fetches key from the backend and writes it to dest, creating parent directories as needed.
 func downloadTo(ctx context.Context, be b2.Backend, key, dest string) error {
 	if dir := filepath.Dir(dest); dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -177,6 +178,7 @@ func Put(ctx context.Context, be b2.Backend, local, remote string, recursive boo
 	return nil
 }
 
+// uploadFrom opens the local file and uploads its contents to the backend under key.
 func uploadFrom(ctx context.Context, be b2.Backend, local, key string) error {
 	f, err := os.Open(local)
 	if err != nil {
@@ -230,6 +232,7 @@ func Rm(ctx context.Context, be b2.Backend, path string, recursive, force bool, 
 	return nil
 }
 
+// confirm prints prompt and returns true only if the user answers yes.
 func confirm(in io.Reader, out io.Writer, prompt string) bool {
 	fmt.Fprintf(out, "%s [y/N]: ", prompt)
 	line, _ := bufio.NewReader(in).ReadString('\n')

@@ -77,6 +77,8 @@ func (s *Server) Serve(ctx context.Context, out io.Writer) error {
 	return srv.Shutdown(shutCtx)
 }
 
+// routes builds the mux, wrapping handlers with the localhost guard and (for
+// state-changing endpoints) the POST/CSRF check.
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.guard(s.handleIndex))
@@ -102,6 +104,7 @@ func (s *Server) guard(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// requirePost rejects non-POST methods and cross-origin requests before invoking h.
 func (s *Server) requirePost(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -139,6 +142,8 @@ func sameOrigin(r *http.Request) bool {
 	return u.Host == r.Host
 }
 
+// handleIndex renders the watched-folder list at the root and the directory
+// listing when drilling into a watched path.
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	path := r.URL.Query().Get("path")
@@ -225,6 +230,7 @@ func (s *Server) buildRow(ctx context.Context, full string, info os.FileInfo) ro
 	return r
 }
 
+// handleUpload backs up all changed files, then redirects back to the current page.
 func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	// A per-file failure is reflected in the refreshed table (Last Backup
 	// unchanged); don't 500 the whole page over it.
@@ -232,6 +238,8 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redirectTarget(r), http.StatusSeeOther)
 }
 
+// handleDelete deletes a watched path locally and remotely, then redirects to its
+// parent (or root).
 func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	path := r.FormValue("path")
@@ -285,6 +293,7 @@ func (s *Server) deletePath(ctx context.Context, path string) error {
 	return os.Remove(path)
 }
 
+// handleClose renders the closed page and signals Serve to shut the server down.
 func (s *Server) handleClose(w http.ResponseWriter, r *http.Request) {
 	renderClosed(w)
 	s.once.Do(func() { close(s.done) })
@@ -312,6 +321,7 @@ func (s *Server) resolveWatched(ctx context.Context, path string) (string, bool)
 	return "", false
 }
 
+// breadcrumbs builds the Home → root → ... → path navigation trail for path.
 func (s *Server) breadcrumbs(root, path string) []crumb {
 	cr := []crumb{
 		{Name: "Home", Href: "/"},
@@ -338,6 +348,7 @@ func redirectTarget(r *http.Request) string {
 	return "/"
 }
 
+// humanSize formats a byte count as a human-readable string (B, KiB, MiB, ...).
 func humanSize(n int64) string {
 	const unit = 1024
 	if n < unit {

@@ -17,10 +17,13 @@ import (
 	"backuprepo/internal/store"
 )
 
+// main runs the CLI and exits with its status code.
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+// run loads config, opens the store, dispatches the subcommand, and returns an
+// exit code (0 success, 1 error).
 func run(args []string) int {
 	ctx := context.Background()
 	cfg, err := config.Load(ctx)
@@ -209,6 +212,7 @@ func argAt(pos []string, i int) string {
 	return ""
 }
 
+// runUpload builds the effective backend and uploads all changed files.
 func runUpload(ctx context.Context, st *store.Store, deleteRemoved bool) error {
 	be, err := buildBackend(ctx, st, "")
 	if err != nil {
@@ -264,6 +268,7 @@ func buildBackend(ctx context.Context, st *store.Store, override string) (b2.Bac
 	})
 }
 
+// usage writes the command help text to w.
 func usage(w io.Writer) {
 	fmt.Fprint(w, `backuprepo — back up folders to Backblaze B2 (S3-compatible or native B2 API)
 
@@ -329,6 +334,7 @@ State: ~/backup_repo/ (backup.db, key).   Exit codes: 0 ok, 1 error (message on 
 `)
 }
 
+// fail prints err to stderr and returns exit code 1.
 func fail(err error) int {
 	fmt.Fprintln(os.Stderr, "error:", err)
 	return 1

@@ -33,6 +33,7 @@ type pageData struct {
 	Message  string
 }
 
+// render writes the main page HTML for data, sending a 500 if templating fails.
 func render(w http.ResponseWriter, data pageData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTmpl.Execute(w, data); err != nil {
@@ -40,6 +41,7 @@ func render(w http.ResponseWriter, data pageData) {
 	}
 }
 
+// renderClosed writes the "web UI has been closed" confirmation page.
 func renderClosed(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = closedTmpl.Execute(w, nil)

@@ -10,6 +10,7 @@ import (
 	"backuprepo/internal/apperr"
 )
 
+// TestFakeUploadDownloadExists verifies upload makes a key exist and downloads its bytes.
 func TestFakeUploadDownloadExists(t *testing.T) {
 	ctx := context.Background()
 	f := NewFake()
@@ -34,6 +35,7 @@ func TestFakeUploadDownloadExists(t *testing.T) {
 	}
 }
 
+// TestFakeDownloadMissing verifies downloading an absent key returns ErrObjectNotFound.
 func TestFakeDownloadMissing(t *testing.T) {
 	_, _, err := NewFake().Download(context.Background(), "nope")
 	if !errors.Is(err, apperr.ErrObjectNotFound) {
@@ -41,6 +43,7 @@ func TestFakeDownloadMissing(t *testing.T) {
 	}
 }
 
+// TestFakeListNonRecursiveGroupsFolders verifies non-recursive List groups subfolders into Prefixes.
 func TestFakeListNonRecursiveGroupsFolders(t *testing.T) {
 	ctx := context.Background()
 	f := NewFake()
@@ -59,6 +62,7 @@ func TestFakeListNonRecursiveGroupsFolders(t *testing.T) {
 	}
 }
 
+// TestFakeListRecursive verifies recursive List returns all nested objects and no Prefixes.
 func TestFakeListRecursive(t *testing.T) {
 	ctx := context.Background()
 	f := NewFake()
@@ -74,6 +78,7 @@ func TestFakeListRecursive(t *testing.T) {
 	}
 }
 
+// TestFakeDelete verifies Delete removes the object and errors with ErrObjectNotFound when absent.
 func TestFakeDelete(t *testing.T) {
 	ctx := context.Background()
 	f := NewFake()

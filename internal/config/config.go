@@ -46,6 +46,8 @@ func Load(ctx context.Context) (*Config, error) {
 	return cfg, nil
 }
 
+// loadOrCreateKey reads the master key from path, or generates and writes a new
+// 32-byte key (0600) if none exists.
 func loadOrCreateKey(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {

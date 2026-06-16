@@ -283,6 +283,7 @@ func Stop(dir string, out io.Writer) error {
 	return nil
 }
 
+// pidPath returns the daemon PID file path within dir.
 func pidPath(dir string) string { return filepath.Join(dir, "daemon.pid") }
 
 // writePID records the current PID, refusing to start if a live daemon is found.
@@ -296,4 +297,5 @@ func writePID(dir string) error {
 	return os.WriteFile(pidPath(dir), []byte(strconv.Itoa(os.Getpid())), 0o600)
 }
 
+// removePID deletes the daemon PID file, ignoring any error.
 func removePID(dir string) { _ = os.Remove(pidPath(dir)) }

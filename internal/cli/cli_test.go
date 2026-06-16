@@ -12,6 +12,7 @@ import (
 	"backuprepo/internal/store"
 )
 
+// key32 returns a deterministic 32-byte encryption key for tests.
 func key32() []byte {
 	k := make([]byte, 32)
 	for i := range k {
@@ -20,6 +21,7 @@ func key32() []byte {
 	return k
 }
 
+// newStore opens a fresh encrypted store in a temp dir for tests.
 func newStore(t *testing.T) *store.Store {
 	t.Helper()
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "c.db"), key32())
@@ -30,6 +32,7 @@ func newStore(t *testing.T) *store.Store {
 	return st
 }
 
+// TestInitThenConfigMasksSecret verifies Config never echoes the stored app key.
 func TestInitThenConfigMasksSecret(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -60,6 +63,7 @@ func TestInitThenConfigMasksSecret(t *testing.T) {
 	}
 }
 
+// TestWatchUnwatchList verifies watch/list/unwatch and that unwatching twice errors.
 func TestWatchUnwatchList(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -84,6 +88,7 @@ func TestWatchUnwatchList(t *testing.T) {
 	}
 }
 
+// TestWatchRejectsMissingDir verifies watching a nonexistent dir returns ErrFolderNotFound.
 func TestWatchRejectsMissingDir(t *testing.T) {
 	st := newStore(t)
 	var out bytes.Buffer
@@ -93,6 +98,7 @@ func TestWatchRejectsMissingDir(t *testing.T) {
 	}
 }
 
+// TestStatusNotConfigured verifies Status reports "not configured" before init.
 func TestStatusNotConfigured(t *testing.T) {
 	st := newStore(t)
 	var out bytes.Buffer
@@ -104,6 +110,7 @@ func TestStatusNotConfigured(t *testing.T) {
 	}
 }
 
+// TestBucketSwitchKeepsCredentials verifies switching buckets leaves credentials and endpoint intact.
 func TestBucketSwitchKeepsCredentials(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -140,6 +147,7 @@ func TestBucketSwitchKeepsCredentials(t *testing.T) {
 	}
 }
 
+// TestBucketSetRequiresConfig verifies setting a bucket before config returns ErrNotConfigured.
 func TestBucketSetRequiresConfig(t *testing.T) {
 	st := newStore(t)
 	err := Bucket(context.Background(), st, "b", "i", &bytes.Buffer{})
@@ -148,6 +156,7 @@ func TestBucketSetRequiresConfig(t *testing.T) {
 	}
 }
 
+// TestSetAppKeyChangesSecretOnly verifies SetAppKey updates only the secret and never echoes it.
 func TestSetAppKeyChangesSecretOnly(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -180,6 +189,7 @@ func TestSetAppKeyChangesSecretOnly(t *testing.T) {
 	}
 }
 
+// TestSetAppKeyRotatesKeyID verifies a non-empty keyID rotates both keyID and secret.
 func TestSetAppKeyRotatesKeyID(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -195,6 +205,7 @@ func TestSetAppKeyRotatesKeyID(t *testing.T) {
 	}
 }
 
+// TestSetAppKeyEmptyRejectedKeepsOld verifies an empty secret is rejected and the old one kept.
 func TestSetAppKeyEmptyRejectedKeepsOld(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
@@ -211,6 +222,7 @@ func TestSetAppKeyEmptyRejectedKeepsOld(t *testing.T) {
 	}
 }
 
+// TestSetAppKeyRequiresConfig verifies SetAppKey before config returns ErrNotConfigured.
 func TestSetAppKeyRequiresConfig(t *testing.T) {
 	st := newStore(t)
 	err := SetAppKey(context.Background(), st, "", strings.NewReader("x\n"), &bytes.Buffer{})

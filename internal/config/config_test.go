@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+// TestLoadCreatesKeyAndDir verifies Load creates the backup dir and a 32-byte
+// 0600 key file, without creating the database.
 func TestLoadCreatesKeyAndDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -36,6 +38,8 @@ func TestLoadCreatesKeyAndDir(t *testing.T) {
 	}
 }
 
+// TestLoadReusesExistingKey verifies a second Load returns the same master key
+// rather than regenerating it.
 func TestLoadReusesExistingKey(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

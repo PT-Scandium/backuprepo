@@ -12,6 +12,7 @@ import (
 	"backuprepo/internal/apperr"
 )
 
+// key32 returns a deterministic 32-byte test key.
 func key32() []byte {
 	k := make([]byte, 32)
 	for i := range k {
@@ -20,6 +21,8 @@ func key32() []byte {
 	return k
 }
 
+// openTest opens an encrypted store at a temp path and returns it with its path,
+// registering cleanup to close it.
 func openTest(t *testing.T) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.db")
@@ -31,6 +34,7 @@ func openTest(t *testing.T) (*Store, string) {
 	return st, path
 }
 
+// TestGetConfigNotConfigured verifies GetConfig returns ErrNotConfigured on a fresh store.
 func TestGetConfigNotConfigured(t *testing.T) {
 	st, _ := openTest(t)
 	if _, err := st.GetConfig(context.Background()); !errors.Is(err, apperr.ErrNotConfigured) {
@@ -38,6 +42,7 @@ func TestGetConfigNotConfigured(t *testing.T) {
 	}
 }
 
+// TestSaveAndGetConfigRoundTrip verifies a saved RemoteConfig is read back unchanged.
 func TestSaveAndGetConfigRoundTrip(t *testing.T) {
 	st, _ := openTest(t)
 	ctx := context.Background()
@@ -60,6 +65,7 @@ func TestSaveAndGetConfigRoundTrip(t *testing.T) {
 	}
 }
 
+// TestConfigEncryptedAtRest verifies credentials are not stored in plaintext on disk.
 func TestConfigEncryptedAtRest(t *testing.T) {
 	st, path := openTest(t)
 	ctx := context.Background()
@@ -77,6 +83,8 @@ func TestConfigEncryptedAtRest(t *testing.T) {
 	}
 }
 
+// TestFolderAddListRemove verifies folder add (idempotent), list, and remove
+// (returning ErrFolderNotWatched when absent).
 func TestFolderAddListRemove(t *testing.T) {
 	st, _ := openTest(t)
 	ctx := context.Background()
@@ -98,6 +106,8 @@ func TestFolderAddListRemove(t *testing.T) {
 	}
 }
 
+// TestFileUpsertAndGet verifies GetFile returns nil for unknown paths and reads
+// back a record after UpsertFile.
 func TestFileUpsertAndGet(t *testing.T) {
 	st, _ := openTest(t)
 	ctx := context.Background()
@@ -118,6 +128,8 @@ func TestFileUpsertAndGet(t *testing.T) {
 	}
 }
 
+// TestConfigRoundTripWithBucketIDAndBackend verifies a RemoteConfig including a
+// bucket ID round-trips through save and get unchanged.
 func TestConfigRoundTripWithBucketIDAndBackend(t *testing.T) {
 	st, _ := openTest(t)
 	ctx := context.Background()
@@ -141,6 +153,8 @@ func TestConfigRoundTripWithBucketIDAndBackend(t *testing.T) {
 	}
 }
 
+// TestBackendDefaultsToS3AndCanBeSet verifies the backend defaults to s3, can be
+// set to b2, and rejects invalid backends with ErrInvalidBackend.
 func TestBackendDefaultsToS3AndCanBeSet(t *testing.T) {
 	st, _ := openTest(t)
 	ctx := context.Background()
@@ -167,6 +181,8 @@ func TestBackendDefaultsToS3AndCanBeSet(t *testing.T) {
 	}
 }
 
+// TestOpenMigratesOldSchema verifies Open adds the missing bucket_id/backend
+// columns to a pre-existing old-schema config table and works normally.
 func TestOpenMigratesOldSchema(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "old.db")

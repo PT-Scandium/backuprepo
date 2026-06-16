@@ -180,6 +180,7 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 	return srv
 }
 
+// testB2 builds a B2Backend pointed at the given test server.
 func testB2(t *testing.T, srv *httptest.Server) *B2Backend {
 	t.Helper()
 	b := newB2Backend(Config{
@@ -190,6 +191,7 @@ func testB2(t *testing.T, srv *httptest.Server) *B2Backend {
 	return b
 }
 
+// TestB2UploadDownload verifies a small file round-trips through Upload and Download.
 func TestB2UploadDownload(t *testing.T) {
 	store := map[string][]byte{}
 	srv := b2TestServer(t, store)
@@ -213,6 +215,7 @@ func TestB2UploadDownload(t *testing.T) {
 	}
 }
 
+// TestB2DownloadMissing verifies downloading an absent key returns ErrObjectNotFound.
 func TestB2DownloadMissing(t *testing.T) {
 	srv := b2TestServer(t, map[string][]byte{})
 	b := testB2(t, srv)
@@ -221,6 +224,7 @@ func TestB2DownloadMissing(t *testing.T) {
 	}
 }
 
+// TestB2ListAndDelete verifies recursive List returns nested objects and Delete removes a key.
 func TestB2ListAndDelete(t *testing.T) {
 	store := map[string][]byte{"a.txt": []byte("1"), "p/b.txt": []byte("2"), "p/c.txt": []byte("3")}
 	srv := b2TestServer(t, store)
@@ -242,6 +246,7 @@ func TestB2ListAndDelete(t *testing.T) {
 	}
 }
 
+// TestB2LargeFileUpload verifies the multipart large-file path reassembles parts correctly.
 func TestB2LargeFileUpload(t *testing.T) {
 	store := map[string][]byte{}
 	srv := b2TestServer(t, store)
@@ -259,6 +264,7 @@ func TestB2LargeFileUpload(t *testing.T) {
 	}
 }
 
+// mustAuth authorizes b and fails the test if authorization errors.
 func mustAuth(t *testing.T, b *B2Backend, ctx context.Context) *b2Auth {
 	t.Helper()
 	a, err := b.authorize(ctx)
@@ -268,6 +274,7 @@ func mustAuth(t *testing.T, b *B2Backend, ctx context.Context) *b2Auth {
 	return a
 }
 
+// TestB2ListNonRecursiveGroupsFolders verifies non-recursive List groups subfolders into Prefixes.
 func TestB2ListNonRecursiveGroupsFolders(t *testing.T) {
 	store := map[string][]byte{
 		"a.txt":            []byte("1"),
@@ -291,6 +298,7 @@ func TestB2ListNonRecursiveGroupsFolders(t *testing.T) {
 	}
 }
 
+// TestB2AuthRejectsEmptyCreds verifies operations fail with ErrInvalidCredentials when creds are empty.
 func TestB2AuthRejectsEmptyCreds(t *testing.T) {
 	store := map[string][]byte{}
 	srv := b2TestServer(t, store)

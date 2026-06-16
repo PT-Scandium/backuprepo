@@ -61,6 +61,7 @@ func (b *B2Backend) uploadLarge(ctx context.Context, auth *b2Auth, key string, r
 	return nil
 }
 
+// uploadPart uploads one part of a large file and returns its SHA-1 hash.
 func (b *B2Backend) uploadPart(ctx context.Context, auth *b2Auth, fileID string, num int, data []byte) (string, error) {
 	var up struct {
 		UploadURL          string `json:"uploadUrl"`

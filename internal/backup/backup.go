@@ -243,6 +243,7 @@ func RemoteKey(path string) string {
 	return strings.TrimPrefix(filepath.ToSlash(path), "/")
 }
 
+// hashFile returns the hex-encoded SHA-256 of the file at path.
 func hashFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -256,6 +257,7 @@ func hashFile(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// copyInto streams src into dst, returning the number of bytes copied.
 func copyInto(dst io.Writer, src io.Reader) (int64, error) {
 	return io.Copy(dst, src)
 }

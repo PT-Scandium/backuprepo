@@ -21,6 +21,7 @@ func NewFake() *FakeBackend {
 	return &FakeBackend{Objects: map[string][]byte{}}
 }
 
+// Upload reads r fully and stores the bytes in memory under key.
 func (f *FakeBackend) Upload(ctx context.Context, key string, r io.Reader, size int64) error {
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -30,11 +31,13 @@ func (f *FakeBackend) Upload(ctx context.Context, key string, r io.Reader, size 
 	return nil
 }
 
+// Exists reports whether key is present in memory.
 func (f *FakeBackend) Exists(ctx context.Context, key string) (bool, error) {
 	_, ok := f.Objects[key]
 	return ok, nil
 }
 
+// Download returns the stored bytes for key, or apperr.ErrObjectNotFound if absent.
 func (f *FakeBackend) Download(ctx context.Context, key string) (io.ReadCloser, int64, error) {
 	data, ok := f.Objects[key]
 	if !ok {
@@ -43,6 +46,7 @@ func (f *FakeBackend) Download(ctx context.Context, key string) (io.ReadCloser, 
 	return io.NopCloser(bytes.NewReader(data)), int64(len(data)), nil
 }
 
+// Delete removes key from memory, or returns apperr.ErrObjectNotFound if absent.
 func (f *FakeBackend) Delete(ctx context.Context, key string) error {
 	if _, ok := f.Objects[key]; !ok {
 		return apperr.ErrObjectNotFound
@@ -51,6 +55,8 @@ func (f *FakeBackend) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// List returns objects under prefix; when not recursive, immediate subfolders
+// are grouped into Prefixes instead of being listed individually.
 func (f *FakeBackend) List(ctx context.Context, prefix string, recursive bool) (Listing, error) {
 	var out Listing
 	seen := map[string]bool{}

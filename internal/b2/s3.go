@@ -24,6 +24,7 @@ type S3Backend struct {
 	bucket string
 }
 
+// newS3Backend builds an S3-compatible backend for the configured B2 bucket and endpoint.
 func newS3Backend(ctx context.Context, cfg Config) (*S3Backend, error) {
 	if cfg.KeyID == "" || cfg.AppKey == "" {
 		return nil, apperr.ErrInvalidCredentials
@@ -45,6 +46,7 @@ func newS3Backend(ctx context.Context, cfg Config) (*S3Backend, error) {
 	return &S3Backend{client: client, bucket: cfg.BucketName}, nil
 }
 
+// Upload stores key, using S3 multipart upload for large files via the manager.
 func (u *S3Backend) Upload(ctx context.Context, key string, r io.Reader, size int64) error {
 	uploader := manager.NewUploader(u.client, func(m *manager.Uploader) {
 		m.PartSize = multipartPartSize
@@ -60,6 +62,7 @@ func (u *S3Backend) Upload(ctx context.Context, key string, r io.Reader, size in
 	return nil
 }
 
+// Exists reports whether key is present via a HeadObject call.
 func (u *S3Backend) Exists(ctx context.Context, key string) (bool, error) {
 	_, err := u.client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(u.bucket),
@@ -76,6 +79,7 @@ func (u *S3Backend) Exists(ctx context.Context, key string) (bool, error) {
 	return false, fmt.Errorf("%w: head %s: %v", apperr.ErrUploadFailed, key, err)
 }
 
+// Download streams key, returning apperr.ErrObjectNotFound if it does not exist.
 func (u *S3Backend) Download(ctx context.Context, key string) (io.ReadCloser, int64, error) {
 	out, err := u.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(u.bucket),
@@ -96,6 +100,8 @@ func (u *S3Backend) Download(ctx context.Context, key string) (io.ReadCloser, in
 	return out.Body, size, nil
 }
 
+// List returns objects under prefix; when not recursive, a "/" delimiter groups
+// immediate subfolders into Prefixes.
 func (u *S3Backend) List(ctx context.Context, prefix string, recursive bool) (Listing, error) {
 	var out Listing
 	in := &s3.ListObjectsV2Input{
@@ -128,6 +134,8 @@ func (u *S3Backend) List(ctx context.Context, prefix string, recursive bool) (Li
 	return out, nil
 }
 
+// Delete removes key, deleting all versions if the bucket is versioned and
+// falling back to a plain delete otherwise.
 func (u *S3Backend) Delete(ctx context.Context, key string) error {
 	// Delete every version if the bucket is versioned; otherwise the single object.
 	vp := s3.NewListObjectVersionsPaginator(u.client, &s3.ListObjectVersionsInput{

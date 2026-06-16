@@ -248,6 +248,7 @@ func readSecret(prompt string, in io.Reader, out io.Writer) (string, error) {
 	return strings.TrimSpace(line), nil
 }
 
+// mask returns the secret with all but its last four characters hidden.
 func mask(secret string) string {
 	if len(secret) <= 4 {
 		return "****"
@@ -255,6 +256,7 @@ func mask(secret string) string {
 	return "****" + secret[len(secret)-4:]
 }
 
+// lastBackup formats a Unix timestamp as RFC3339, or "never" when nil.
 func lastBackup(ts *int64) string {
 	if ts == nil {
 		return "never"
