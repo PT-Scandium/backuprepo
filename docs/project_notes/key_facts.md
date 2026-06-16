@@ -14,8 +14,14 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
 
 - Build command: `go build -ldflags="-s -w" -o backuprepo .`
 - **Makefile**: `make` builds a single static binary named **`bb`** (short for Backblaze) with `CGO_ENABLED=0 -trimpath -ldflags="-s -w"`; `make install` copies it to `$(PREFIX)` (default `~/.local/bin`). Other targets: `clean`, `uninstall`, `test`, `vet`, `fmt`, `tidy`, `help`. The binary name does not change behavior.
-- Stripped binary size: ~14 MB (see decisions.md ADR-007); statically linked (no CGO), runs on any Linux host with no shared-lib deps.
-- Test suite: `go test ./...` (6 internal packages have tests)
+- Stripped binary size: ~21 MB (see decisions.md ADR-007; grew with fsnotify + x/term); statically linked (no CGO), cross-compiles cleanly to Windows.
+- Test suite: `go test ./...`
+
+### Versioning
+
+- **Source of truth:** the root `VERSION` file (e.g. `1.0.0`). It is **embedded into the binary** via `//go:embed` in `main.go`; `bb version` (`--version`/`-v`) prints it. Released as git tag `v<VERSION>` (e.g. `v1.0.0`) — first release tagged 2026-06-16.
+- **Scheme** (`internal/version`, odometer): `major.minor.patch`, each component `0..20`; incrementing past 20 wraps to 0 and carries into the next-higher component — `1.0.20 → 1.1.0`, `1.20.20 → 2.0.0`. **Major is the top component and unbounded.** Fully unit-tested.
+- **Bump:** `make bump` (patch, with carry), `make bump-minor`, `make bump-major` — or `go run ./cmd/bump [major|minor|patch]`. The tool rewrites `VERSION`; rebuild to bake the new value into the binary.
 
 ### Local state layout (`~/backup_repo/`)
 
