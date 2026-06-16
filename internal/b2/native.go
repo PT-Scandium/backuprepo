@@ -22,7 +22,10 @@ const b2SmallFileLimit = 100 * 1024 * 1024
 
 const defaultB2AuthURL = "https://api.backblazeb2.com"
 
-// B2Backend talks to Backblaze via the native B2 v2 API.
+// b2APIVersion is the native B2 API version segment used in endpoint paths.
+const b2APIVersion = "v3"
+
+// B2Backend talks to Backblaze via the native B2 v3 API.
 type B2Backend struct {
 	cfg      Config
 	http     *http.Client
@@ -51,7 +54,7 @@ func (b *B2Backend) authorize(ctx context.Context) (*b2Auth, error) {
 		return nil, apperr.ErrInvalidCredentials
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		b.authURL+"/b2api/v2/b2_authorize_account", nil)
+		b.authURL+"/b2api/"+b2APIVersion+"/b2_authorize_account", nil)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", apperr.ErrAuthFailed, err)
 	}
@@ -64,18 +67,26 @@ func (b *B2Backend) authorize(ctx context.Context) (*b2Auth, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%w: status %d", apperr.ErrAuthFailed, resp.StatusCode)
 	}
+	// In v3, the storage-API endpoints (apiUrl, downloadUrl, recommendedPartSize)
+	// are nested under apiInfo.storageApi; only authorizationToken is top-level.
 	var out struct {
-		APIURL              string `json:"apiUrl"`
-		DownloadURL         string `json:"downloadUrl"`
-		AuthorizationToken  string `json:"authorizationToken"`
-		RecommendedPartSize int64  `json:"recommendedPartSize"`
+		AuthorizationToken string `json:"authorizationToken"`
+		APIInfo            struct {
+			StorageAPI struct {
+				APIURL              string `json:"apiUrl"`
+				DownloadURL         string `json:"downloadUrl"`
+				RecommendedPartSize int64  `json:"recommendedPartSize"`
+			} `json:"storageApi"`
+		} `json:"apiInfo"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("%w: decode: %v", apperr.ErrAuthFailed, err)
 	}
 	b.auth = &b2Auth{
-		APIURL: out.APIURL, DownloadURL: out.DownloadURL,
-		Token: out.AuthorizationToken, RecommendedPartSize: out.RecommendedPartSize,
+		APIURL:              out.APIInfo.StorageAPI.APIURL,
+		DownloadURL:         out.APIInfo.StorageAPI.DownloadURL,
+		Token:               out.AuthorizationToken,
+		RecommendedPartSize: out.APIInfo.StorageAPI.RecommendedPartSize,
 	}
 	return b.auth, nil
 }
@@ -87,7 +98,7 @@ func (b *B2Backend) postJSON(ctx context.Context, auth *b2Auth, endpoint string,
 		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		auth.APIURL+"/b2api/v2/"+endpoint, bytes.NewReader(buf))
+		auth.APIURL+"/b2api/"+b2APIVersion+"/"+endpoint, bytes.NewReader(buf))
 	if err != nil {
 		return err
 	}
@@ -283,11 +294,17 @@ func (b *B2Backend) Delete(ctx context.Context, key string) error {
 			NextFileID   *string `json:"nextFileId"`
 		}
 		body := map[string]any{
-			"bucketId":      b.cfg.BucketID,
-			"prefix":        key,
-			"startFileName": start,
-			"startFileId":   startID,
-			"maxFileCount":  1000,
+			"bucketId":     b.cfg.BucketID,
+			"prefix":       key,
+			"maxFileCount": 1000,
+		}
+		// B2 rejects startFileId unless a non-empty startFileName accompanies
+		// it, and an empty startFileName cursor is unnecessary on the first page.
+		if start != "" {
+			body["startFileName"] = start
+			if startID != "" {
+				body["startFileId"] = startID
+			}
 		}
 		if err := b.postJSON(ctx, auth, "b2_list_file_versions", body, &resp); err != nil {
 			return fmt.Errorf("%w: list versions %s: %v", apperr.ErrDeleteFailed, key, err)

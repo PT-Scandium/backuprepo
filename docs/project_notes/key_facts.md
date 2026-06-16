@@ -12,7 +12,8 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
 ### Build
 
 - Build command: `go build -ldflags="-s -w" -o backuprepo .`
-- Stripped binary size: ~14 MB (see decisions.md ADR-007)
+- **Makefile**: `make` builds a single static binary named **`bb`** (short for Backblaze) with `CGO_ENABLED=0 -trimpath -ldflags="-s -w"`; `make install` copies it to `$(PREFIX)` (default `~/.local/bin`). Other targets: `clean`, `uninstall`, `test`, `vet`, `fmt`, `tidy`, `help`. The binary name does not change behavior.
+- Stripped binary size: ~14 MB (see decisions.md ADR-007); statically linked (no CGO), runs on any Linux host with no shared-lib deps.
 - Test suite: `go test ./...` (6 internal packages have tests)
 
 ### Local state layout (`~/backup_repo/`)
@@ -30,7 +31,7 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
 ### Storage backends
 
 - **`s3`** (default) — S3-compatible Backblaze B2 endpoint via `aws-sdk-go-v2`; addresses bucket by **name**.
-- **`b2`** — Native Backblaze B2 **v2 API** (`/b2api/v2/...`) over stdlib `net/http`; addresses bucket by **ID** for list/upload, by **name** for download.
+- **`b2`** — Native Backblaze B2 **v3 API** (`/b2api/v3/...`) over stdlib `net/http`; addresses bucket by **ID** for list/upload, by **name** for download. The `b2_authorize_account` response nests `apiUrl`/`downloadUrl`/`recommendedPartSize` under `apiInfo.storageApi` (v3 shape). API version lives in `b2APIVersion` in `native.go`.
 - Stored in `backend TEXT` column of `config` table; `NULL`/empty defaults to `"s3"`.
 - Switch with `backuprepo backend [s3|b2]`; override per-command with `--backend s3|b2`.
 

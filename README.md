@@ -181,7 +181,7 @@ backuprepo supports two storage backends, selectable at any time:
 | Backend | Identifier | Protocol |
 |---------|-----------|---------|
 | **S3-compatible** (default) | `s3` | aws-sdk-go-v2, S3-compatible Backblaze endpoint |
-| **Native B2** | `b2` | Backblaze B2 v2 API over stdlib `net/http` |
+| **Native B2** | `b2` | Backblaze B2 v3 API over stdlib `net/http` |
 
 The stored backend is used by `upload` and all manual file commands. Switch it permanently with:
 
