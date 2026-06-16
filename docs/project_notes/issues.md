@@ -73,6 +73,16 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   - Tests: switch keeps credentials/endpoint/region intact + no-arg show; set without config → `ErrNotConfigured`.
 - **Notes**: Bucket-only change — the stored key must already have access to the new bucket. A bucket-scoped key (see security note) won't authorize a different bucket; for that, re-run `init`. No new ADR (operates within ADR-010's name+ID model). Merged after the daemon PR (#4); see PR #5.
 
+### 2026-06-16 - `appkey` command: rotate the application key without full re-init
+- **Status**: Implemented on branch `feat/change-appkey` (off `master`). `go test ./...` green; vet/gofmt clean.
+- **Description**: Added `bb appkey [<new-keyID>]` to replace the stored applicationKey (and optionally the keyID) without re-running `init`:
+  - **Secret read from stdin** (one line), never from `argv` — keeps it out of shell history, the process list, and (importantly) the Claude `!`-prefix transcript. Supports piping: `pass show … | bb appkey <new-keyID>`.
+  - `store.SetCredentials(keyID, appKey)` re-encrypts and updates `app_key_enc` (and `key_id_enc` when keyID given) in a **single statement** so the pair can't end up mismatched. Requires existing config.
+  - `cli.SetAppKey` checks `IsConfigured` first, rejects an empty secret (`ErrInvalidCredentials`, leaving the old key intact), and prints only a masked confirmation (`****XXXX`) — never the secret.
+  - `main.go` dispatch (`case "appkey"`, ≤1 positional) + `usage` SETUP entry.
+  - Tests: change-secret-only (other fields intact, secret not leaked to output), rotate keyID+secret, empty rejected keeps old, requires config.
+- **Notes**: Born from the 2026-06-16 key-exposure incident — the stdin-only design is the deliberate fix for "don't put secrets on the command line." No-echo interactive entry (`golang.org/x/term`) is a possible future enhancement; piping is the secure path today. No new ADR (operates within the existing credential model).
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).

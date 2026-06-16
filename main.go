@@ -154,6 +154,11 @@ func run(args []string) int {
 			return fail(fmt.Errorf("usage: backuprepo bucket [<name> [<bucket-id>]]"))
 		}
 		err = cli.Bucket(ctx, st, argAt(rest, 0), argAt(rest, 1), os.Stdout)
+	case "appkey":
+		if len(rest) > 1 {
+			return fail(fmt.Errorf("usage: backuprepo appkey [<new-keyID>]  (secret read from stdin)"))
+		}
+		err = cli.SetAppKey(ctx, st, argAt(rest, 0), os.Stdin, os.Stdout)
 	case "start":
 		fs := flag.NewFlagSet("start", flag.ContinueOnError)
 		del := fs.Bool("delete", false, "also remove remote objects whose local files were deleted")
@@ -259,6 +264,8 @@ SETUP
   init                       Interactive setup: credentials, bucket name, bucket ID, endpoint, region, first folder
   config                     Show current configuration (app key masked) + active backend
   bucket [<name> [<id>]]     Show, or switch to another bucket (changes only name + ID; keeps credentials)
+  appkey [<new-keyID>]       Replace the stored application key — reads the secret from stdin (keeps it out
+                               of shell history); pass a new keyID to rotate the whole pair
 
 BACKUP  (watch local folders, upload changed files)
   watch <dir>                Add a folder to the watch list

@@ -147,3 +147,74 @@ func TestBucketSetRequiresConfig(t *testing.T) {
 		t.Fatalf("want ErrNotConfigured, got %v", err)
 	}
 }
+
+func TestSetAppKeyChangesSecretOnly(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	if err := st.SaveConfig(ctx, store.RemoteConfig{
+		KeyID: "old-id", AppKey: "old-secret", Bucket: "b", BucketID: "bid",
+		Endpoint: "e", Region: "r",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	const secret = "K005-NEW-APPLICATION-KEY-VALUE"
+	if err := SetAppKey(ctx, st, "", strings.NewReader(secret+"\n"), &out); err != nil {
+		t.Fatalf("SetAppKey: %v", err)
+	}
+	cfg, err := st.GetConfig(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AppKey != secret {
+		t.Fatalf("appKey not updated: %q", cfg.AppKey)
+	}
+	// keyID and everything else untouched.
+	if cfg.KeyID != "old-id" || cfg.Bucket != "b" || cfg.BucketID != "bid" || cfg.Endpoint != "e" || cfg.Region != "r" {
+		t.Fatalf("non-secret fields changed: %+v", cfg)
+	}
+	// The secret must never be echoed back.
+	if strings.Contains(out.String(), secret) {
+		t.Fatalf("secret leaked into output: %q", out.String())
+	}
+}
+
+func TestSetAppKeyRotatesKeyID(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	if err := st.SaveConfig(ctx, store.RemoteConfig{KeyID: "old-id", AppKey: "old", Bucket: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAppKey(ctx, st, "new-id", strings.NewReader("new-secret\n"), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _ := st.GetConfig(ctx)
+	if cfg.KeyID != "new-id" || cfg.AppKey != "new-secret" {
+		t.Fatalf("pair not rotated: %s / %s", cfg.KeyID, cfg.AppKey)
+	}
+}
+
+func TestSetAppKeyEmptyRejectedKeepsOld(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	if err := st.SaveConfig(ctx, store.RemoteConfig{KeyID: "old-id", AppKey: "keepme", Bucket: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	err := SetAppKey(ctx, st, "", strings.NewReader("   \n"), &bytes.Buffer{})
+	if !errors.Is(err, apperr.ErrInvalidCredentials) {
+		t.Fatalf("want ErrInvalidCredentials for empty secret, got %v", err)
+	}
+	cfg, _ := st.GetConfig(ctx)
+	if cfg.AppKey != "keepme" {
+		t.Fatalf("secret should be unchanged after rejection, got %q", cfg.AppKey)
+	}
+}
+
+func TestSetAppKeyRequiresConfig(t *testing.T) {
+	st := newStore(t)
+	err := SetAppKey(context.Background(), st, "", strings.NewReader("x\n"), &bytes.Buffer{})
+	if !errors.Is(err, apperr.ErrNotConfigured) {
+		t.Fatalf("want ErrNotConfigured, got %v", err)
+	}
+}
