@@ -49,7 +49,7 @@ Collected by `backuprepo init`, stored in `backup.db`:
 
 Partial reconfig without a full `init` (all require existing config):
 - `bucket [<name> [<id>]]` — show/switch the destination bucket (name + ID only).
-- `appkey [<new-keyID>]` — replace the applicationKey, **read from stdin** (never argv/shell history); optional keyID rotates the whole pair. Reads the first stdin line; empty → `ErrInvalidCredentials`; secret never echoed back (masked via `mask`).
+- `appkey [<new-keyID>]` — replace the applicationKey, **read from stdin** (never argv/shell history); optional keyID rotates the whole pair. Interactive entry is **no-echo** (via `golang.org/x/term`); piped/non-terminal input reads a line (so `pass show … | bb appkey` and tests work). Empty → `ErrInvalidCredentials`; the secret is never echoed back (masked via `mask`). See ADR-016.
 
 ### Manual bucket commands
 
@@ -69,7 +69,7 @@ Available once configured; all accept `--backend s3|b2`:
 - `store` — SQLite persistence (encrypted creds, folders, files, backend mode); `SetBucket` switches the destination bucket name + ID; `SetCredentials` re-encrypts a new applicationKey (+ optional keyID) in one statement — all without touching the rest of the config
 - `b2` — `Backend` interface (embeds `Uploader`), `S3Backend`, `B2Backend`, `FakeBackend`; `NewBackend` factory
 - `backup` — folder walk + change detection + upload orchestration (depends on `b2.Uploader`; optional `b2.Deleter` via `WithDeleter` enables opt-in deletion propagation)
-- `daemon` — background watcher (built 2026-06-16): recursive fsnotify watch + 5-min fallback scan + 1s/5s debounce; `start`/`stop` lifecycle (PID file `~/backup_repo/daemon.pid`). Runs on **Linux + Windows** — OS-specific signal/stop/liveness logic lives in build-tagged `signals_unix.go` / `signals_windows.go` (ADR-014); Windows `stop` is forceful (`proc.Kill`), Unix is graceful (SIGTERM). Depends on `store` + `b2.Uploader` via `backup.Service`.
+- `daemon` — background watcher (built 2026-06-16): recursive fsnotify watch + 5-min fallback scan + 1s/5s debounce; `start`/`stop` lifecycle (PID file `~/backup_repo/daemon.pid`). Runs on **Linux + Windows** — OS-specific signal/stop/liveness logic lives in build-tagged `signals_unix.go` / `signals_windows.go` (ADR-014); `stop` is graceful on both — Unix via SIGTERM, Windows via a named stop event (forceful `proc.Kill` fallback), see ADR-016. Depends on `store` + `b2.Uploader` via `backup.Service`.
 - `cli` — subcommand handlers incl. `Ls`/`Get`/`Put`/`Rm`/`Find`/`Backend`/`Bucket`/`SetAppKey` + `Start`/`Stop`/`Serve` (io injected for testability)
 - `web` — localhost web UI (`bb serve`, port 9171): `html/template` page over stdlib `net/http`; lists watched folders' contents with backup state, Upload + Close buttons, 🗑️ delete (local + remote). `127.0.0.1`-only, no auth, Host-header guard + `Origin`/`Referer` CSRF check on POSTs; browsing/deletion confined to watched folders. OS owner via build-tagged `owner_{unix,windows}.go`. See ADR-015.
 - root `main.go` — dispatch (incl. `start`/`stop`/`serve`/`bucket`/`appkey`) + per-command FlagSet + effective-backend factory

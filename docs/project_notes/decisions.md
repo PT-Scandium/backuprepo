@@ -235,7 +235,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 **Consequences:**
 - ✅ `go build`/`go vet` pass for both `GOOS=linux` and `GOOS=windows`; the right file is selected per platform from one codebase. Windows binary links (`PE32+`).
 - ✅ Foreground Ctrl-C is graceful on both OSes.
-- ❌ `bb stop` on Windows is forceful: the in-flight upload is aborted (retried next run) and the PID file is left stale (overwritten on next start). Documented in README.
+- ❌ `bb stop` on Windows is forceful: the in-flight upload is aborted (retried next run) and the PID file is left stale (overwritten on next start). Documented in README. _(Superseded by ADR-016: Windows `stop` is now graceful via a named event; `proc.Kill` is only the fallback.)_
 - ❌ Windows `processAlive` is coarser than Unix's signal-0 (handle-open ≈ alive) — adequate for the double-start guard.
 
 ### ADR-015: Web UI is localhost-only, unauthenticated, confined to watched folders; delete is local+remote with confirmation (2026-06-16)
@@ -263,3 +263,22 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ❌ Delete is irreversible by design — the confirm dialog is the only safety net (no trash/undo).
 - ❌ No auth at all — safe only on a trusted local machine; anyone with localhost access (or local code running there) can use it.
 - CSRF is defended by the `Origin`/`Referer` same-origin check on POSTs (the Host guard alone does NOT cover CSRF — that was an initial gap caught by automated review; see bugs.md 2026-06-16).
+
+### ADR-016: Graceful Windows daemon stop (named event) and no-echo secret entry (2026-06-16)
+
+**Context:**
+- Two polish items from earlier ADRs: ADR-014 left Windows `bb stop` *forceful* (`proc.Kill`), losing the daemon's deferred cleanup; and `bb appkey` (the partial-reconfig credential command) read the secret from stdin with terminal **echo** during interactive entry.
+
+**Decision:**
+- **Graceful Windows stop via a named event.** On startup the daemon creates a per-PID manual-reset event `Local\backuprepo-daemon-stop-<pid>` and waits on it in a goroutine (`installStopWatcher`, build-tagged). `bb stop` opens that event by the PID from the PID file and `SetEvent`s it; the daemon's `Run` selects on the resulting channel and returns through its normal deferred cleanup (PID file removed, watcher closed). `proc.Kill` remains only as a fallback when the event can't be opened. Unix `installStopWatcher` is a no-op (SIGTERM already graceful). Uses `golang.org/x/sys/windows` — already a transitive dep, no new module.
+- **No-echo secret entry.** `cli.readSecret` reads without echo via `golang.org/x/term.ReadPassword` when stdin is an interactive terminal (`term.IsTerminal`), and falls back to a line read otherwise — preserving piping (`pass show … | bb appkey`) and unit tests (which pass a non-`*os.File` reader). Adds the small official `golang.org/x/term` module.
+
+**Alternatives Considered:**
+- Windows `GenerateConsoleCtrlEvent` for stop → Rejected: only works within a shared console/process group; the named event is reliable cross-process.
+- A localhost control socket / pipe for stop → Rejected: heavier and a wider surface than a kernel event object.
+- Hand-rolled termios/console-mode toggling for no-echo → Rejected: `x/term` is the maintained, cross-platform answer for ~one import.
+
+**Consequences:**
+- ✅ `bb stop` is graceful on both OSes; interactive `bb appkey` no longer leaks the secret to screen/scrollback. `GOOS=windows` build + vet pass; Linux tests (incl. the existing `appkey` ones via the line-read fallback) green.
+- ✅ No new *module* for the Windows stop (`x/sys` already present); one small new module (`x/term`) for no-echo.
+- ❌ The graceful-stop and no-echo paths are exercised only on real Windows / real TTY respectively — unit tests cover the fallbacks; the cross-compile build is the gate for the Windows event code.
