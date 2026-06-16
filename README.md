@@ -6,15 +6,30 @@ A cross-platform CLI that watches user-specified folders and uploads changed fil
 
 ---
 
-## Build
+## Build & install
 
-Requires Go 1.25+. No CGO — uses pure-Go SQLite (`modernc.org/sqlite`).
+Requires Go 1.25+. No CGO — uses pure-Go SQLite (`modernc.org/sqlite`), so the result is a single **statically linked** binary that runs on any Linux host with no shared-library dependencies.
+
+### Option A — Makefile (recommended)
+
+The Makefile builds a short-named binary, **`bb`** (for Backblaze):
+
+```sh
+make            # build ./bb in the repo
+make install    # build and copy bb to ~/.local/bin (must be on your PATH)
+```
+
+Install system-wide instead with `sudo make install PREFIX=/usr/local/bin`. Other targets: `make clean`, `make uninstall`, `make test`, `make help`.
+
+### Option B — plain go build
 
 ```sh
 go build -ldflags="-s -w" -o backuprepo .
 ```
 
 The stripped binary is approximately **14 MB** (aws-sdk-go-v2 + modernc.org/sqlite account for most of the size; this is **above** the <10 MB original target and is noted for future trimming).
+
+> **Binary name:** the examples below call `./backuprepo`. If you installed with `make install`, the command is just **`bb`** and works from any directory — `bb` and `./backuprepo` are the same program, so `bb init`, `bb upload`, etc. are equivalent.
 
 ---
 
@@ -216,6 +231,8 @@ These commands let you interact directly with the B2 bucket. They work against w
 | `backuprepo backend [s3\|b2]` | Show or set the stored backend. |
 
 Each command also accepts `--backend s3|b2` to override the stored backend for that invocation only.
+
+> **Flag position:** flags (`-r`, `-f`, `-y`, `--backend`) may appear before, after, or between the path arguments — `rm brtest/ -r -f` and `rm -r -f brtest/` are equivalent.
 
 ### Example session
 

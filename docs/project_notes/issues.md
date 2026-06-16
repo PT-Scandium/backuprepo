@@ -38,8 +38,13 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 - **Description**: Added a `Makefile` that builds a single **static** binary named `bb` (`CGO_ENABLED=0`, `-trimpath -ldflags="-s -w"`) for easy PATH install on Linux. Targets: `build` (default), `install` (→ `$(PREFIX)`, default `~/.local/bin`), `uninstall`, `clean`, `test`, `vet`, `fmt`, `tidy`, `help`. Added `/bb` to `.gitignore`.
 - **Notes**: Verified `make` output is `not a dynamic executable` (fully static), 14 MB, runs. Binary name is cosmetic — all subcommands behave identically.
 
+### 2026-06-16 - Flags accepted in any position + README guide
+- **Status**: Completed
+- **Description**: Fixed the flag-ordering footgun (stdlib `flag.Parse` stops at the first positional, so trailing `-r`/`-f`/`--backend` were silently dropped on `ls`/`get`/`put`/`rm`/`find`). Added `parseFlags` in `main.go` that resumes parsing after each positional, returning positionals; all five commands now use it (`argAt` for safe indexing). Added `TestParseFlagsAnyOrder`. Updated `README.md` into a fuller user guide: `make`/`bb` build+install section, binary-name note, and a flag-position note.
+- **Notes**: Verified live — `bb ls <path> --backend bogus` now errors (flag parsed) where it previously didn't. See bugs.md 2026-06-16 (flag ordering).
+
 ## Pending / Next
 
-- **`rm` flag ordering** — Go's `flag` stops at the first positional, so `rm <path> -f` silently ignores `-f` (prompts, then aborts under no TTY). Flags must precede the path (`rm -f <path>`). Consider reordering args or manual flag parsing so `-f`/`-r`/`-y` work in any position. Minor UX bug, not data-affecting.
+- ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).
 - **Daemon + web UI (next spec)** — Background watcher (fsnotify + 5-min fallback scan), `serve`/`start`/`stop`, web UI on port 9171. Designed in `CLAUDE.md`; not yet built.
 - **Minor follow-ups from final review** — `b2.Uploader.Exists` and the `size` param are unused forward-looking hooks; a couple of cosmetic nits (`copyInto` wrapper, `usage(*os.File)` vs `io.Writer`).

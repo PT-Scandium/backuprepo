@@ -64,75 +64,80 @@ func run(args []string) int {
 		fs := flag.NewFlagSet("ls", flag.ContinueOnError)
 		recursive := fs.Bool("r", false, "recursive")
 		backend := fs.String("backend", "", "override backend (s3|b2)")
-		if err = fs.Parse(rest); err != nil {
+		pos, e := parseFlags(fs, rest)
+		if e != nil {
 			return 1
 		}
 		be, e := buildBackend(ctx, st, *backend)
 		if e != nil {
 			return fail(e)
 		}
-		err = cli.Ls(ctx, be, fs.Arg(0), *recursive, os.Stdout)
+		err = cli.Ls(ctx, be, argAt(pos, 0), *recursive, os.Stdout)
 	case "find":
 		fs := flag.NewFlagSet("find", flag.ContinueOnError)
 		backend := fs.String("backend", "", "override backend (s3|b2)")
-		if err = fs.Parse(rest); err != nil {
+		pos, e := parseFlags(fs, rest)
+		if e != nil {
 			return 1
 		}
-		if fs.NArg() < 1 {
+		if len(pos) < 1 {
 			return fail(fmt.Errorf("usage: backuprepo find <query> [prefix]"))
 		}
 		be, e := buildBackend(ctx, st, *backend)
 		if e != nil {
 			return fail(e)
 		}
-		err = cli.Find(ctx, be, fs.Arg(0), fs.Arg(1), os.Stdout)
+		err = cli.Find(ctx, be, argAt(pos, 0), argAt(pos, 1), os.Stdout)
 	case "get":
 		fs := flag.NewFlagSet("get", flag.ContinueOnError)
 		recursive := fs.Bool("r", false, "recursive")
 		backend := fs.String("backend", "", "override backend (s3|b2)")
-		if err = fs.Parse(rest); err != nil {
+		pos, e := parseFlags(fs, rest)
+		if e != nil {
 			return 1
 		}
-		if fs.NArg() < 1 {
+		if len(pos) < 1 {
 			return fail(fmt.Errorf("usage: backuprepo get <remote> [local] [-r]"))
 		}
 		be, e := buildBackend(ctx, st, *backend)
 		if e != nil {
 			return fail(e)
 		}
-		err = cli.Get(ctx, be, fs.Arg(0), fs.Arg(1), *recursive, os.Stdout)
+		err = cli.Get(ctx, be, argAt(pos, 0), argAt(pos, 1), *recursive, os.Stdout)
 	case "put":
 		fs := flag.NewFlagSet("put", flag.ContinueOnError)
 		recursive := fs.Bool("r", false, "recursive")
 		backend := fs.String("backend", "", "override backend (s3|b2)")
-		if err = fs.Parse(rest); err != nil {
+		pos, e := parseFlags(fs, rest)
+		if e != nil {
 			return 1
 		}
-		if fs.NArg() < 1 {
+		if len(pos) < 1 {
 			return fail(fmt.Errorf("usage: backuprepo put <local> [remote] [-r]"))
 		}
 		be, e := buildBackend(ctx, st, *backend)
 		if e != nil {
 			return fail(e)
 		}
-		err = cli.Put(ctx, be, fs.Arg(0), fs.Arg(1), *recursive, os.Stdout)
+		err = cli.Put(ctx, be, argAt(pos, 0), argAt(pos, 1), *recursive, os.Stdout)
 	case "rm":
 		fs := flag.NewFlagSet("rm", flag.ContinueOnError)
 		recursive := fs.Bool("r", false, "recursive")
 		force := fs.Bool("f", false, "skip confirmation")
 		fs.BoolVar(force, "y", false, "skip confirmation")
 		backend := fs.String("backend", "", "override backend (s3|b2)")
-		if err = fs.Parse(rest); err != nil {
+		pos, e := parseFlags(fs, rest)
+		if e != nil {
 			return 1
 		}
-		if fs.NArg() < 1 {
+		if len(pos) < 1 {
 			return fail(fmt.Errorf("usage: backuprepo rm <path> [-r] [-f]"))
 		}
 		be, e := buildBackend(ctx, st, *backend)
 		if e != nil {
 			return fail(e)
 		}
-		err = cli.Rm(ctx, be, fs.Arg(0), *recursive, *force, os.Stdin, os.Stdout)
+		err = cli.Rm(ctx, be, argAt(pos, 0), *recursive, *force, os.Stdin, os.Stdout)
 	case "backend":
 		kind := ""
 		if len(rest) > 0 {
@@ -149,6 +154,33 @@ func run(args []string) int {
 		return fail(err)
 	}
 	return 0
+}
+
+// parseFlags parses args while allowing flags and positional arguments to
+// appear in any order, returning the positionals. The stdlib flag parser stops
+// at the first non-flag token, so we resume parsing after each positional —
+// this lets `ls photos/ -r` and `rm brtest/ -r -f` behave like `ls -r photos/`.
+func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
+	var positionals []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			return positionals, nil
+		}
+		positionals = append(positionals, rest[0])
+		args = rest[1:]
+	}
+}
+
+// argAt returns the i-th positional, or "" if absent.
+func argAt(pos []string, i int) string {
+	if i < len(pos) {
+		return pos[i]
+	}
+	return ""
 }
 
 func runUpload(ctx context.Context, st *store.Store) error {
