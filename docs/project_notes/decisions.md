@@ -109,7 +109,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - Adding a native Backblaze B2 API client alongside the existing S3-compatible client. Existing SDKs (e.g. `blazer`) would add a significant dependency; the B2 v2 API is simple enough to drive directly.
 
 **Decision:**
-- Implement `B2Backend` in `internal/b2/native.go` and `internal/b2/largefile.go` using only stdlib `net/http`, `encoding/json`, and `crypto/sha1`. Target the **B2 v2 API** (`/b2api/v2/...` endpoints).
+- Implement `B2Backend` in `internal/b2/native.go` and `internal/b2/largefile.go` using only stdlib `net/http`, `encoding/json`, and `crypto/sha1`. Target the **B2 v2 API** (`/b2api/v2/...` endpoints). _(Superseded by ADR-011: migrated to v3.)_
 - Introduce a unified `b2.Backend` interface (embedding the existing `b2.Uploader`) that both `S3Backend` and `B2Backend` satisfy. `backup.Service` continues to depend only on the narrow `b2.Uploader` view (interface segregation) — it has no need for `Download`, `List`, or `Delete`; manual file commands depend on the wider `Backend`.
 - `FakeBackend` (in-memory map) replaces the old `FakeUploader` and implements the full `Backend` interface for tests.
 
@@ -153,3 +153,21 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ Both backends work from the same stored config without separate init flows.
 - ✅ Migration is safe for existing users (column defaults to empty string).
 - ❌ Users must look up the bucket ID in the B2 console (documented in README and init prompts).
+
+### ADR-011: Migrate native B2 client from v2 to v3 API (2026-06-16)
+
+**Context:**
+- The native B2 client (ADR-008) was implemented against the **v2** API (`/b2api/v2/...`), but the dual-backend design spec (`docs/superpowers/specs/2026-06-06-backuprepo-backends-design.md`) specified **v3**. Code and spec disagreed; v3 is Backblaze's current recommended version.
+
+**Decision:**
+- Migrate `B2Backend` to the **v3** API. Introduce `b2APIVersion = "v3"` in `native.go` and build all endpoint paths from it (single point of change for future bumps).
+- Update `authorize` to parse the v3 `b2_authorize_account` response, where `apiUrl`/`downloadUrl`/`recommendedPartSize` are nested under `apiInfo.storageApi` (only `authorizationToken` stays top-level).
+- All other endpoints (`b2_get_upload_url`, `b2_upload_file`, `b2_list_file_names`, `b2_list_file_versions`, `b2_delete_file_version`, the large-file calls, download-by-name) are byte-for-byte compatible between v2 and v3 — only the path segment changed.
+
+**Alternatives Considered:**
+- Edit the two spec lines to say v2 (docs → code) → Rejected: the user chose to modernize to v3, the supported current version.
+
+**Consequences:**
+- ✅ Code, spec, and key_facts now agree on v3.
+- ✅ httptest tests updated to the v3 auth shape and all pass; vet/gofmt clean.
+- ❌ Live B2 verification with real credentials still pending (httptest cannot exercise real auth) — folded into the existing "Manual B2 end-to-end test" in `issues.md`. A wrong nested-mapping would fail loudly at authorize, not silently.

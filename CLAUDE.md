@@ -120,7 +120,7 @@ This repository is in early development. Licensed under MIT (PT-Scandium).
 
 The spec above is the original aspirational design. The **core CLI is implemented and merged** (`internal/{apperr,crypto,config,store,b2,backup,cli}` + `main.go`; subcommands `init`/`watch`/`unwatch`/`list`/`status`/`upload`/`config`). The **daemon and web UI (port 9171) are NOT yet built.**
 
-A **native Backblaze B2 backend** (`B2Backend`, B2 v2 API over stdlib `net/http`) now exists alongside the S3-compatible backend (`S3Backend`), behind a unified `b2.Backend` interface. Six **manual bucket commands** are implemented: `ls`, `get`, `put`, `rm`, `find`, and `backend`. Switch backends persistently with `backuprepo backend [s3|b2]` or per-command with `--backend s3|b2`. The stored backend defaults to `s3`.
+A **native Backblaze B2 backend** (`B2Backend`, B2 v3 API over stdlib `net/http`) now exists alongside the S3-compatible backend (`S3Backend`), behind a unified `b2.Backend` interface. Six **manual bucket commands** are implemented: `ls`, `get`, `put`, `rm`, `find`, and `backend`. Switch backends persistently with `backuprepo backend [s3|b2]` or per-command with `--backend s3|b2`. The stored backend defaults to `s3`.
 
 Several invariants above were deliberately changed in implementation — see `docs/project_notes/decisions.md` for the authoritative record. Notably: DB uses **pure-Go SQLite + AES-256-GCM field encryption, NOT SQLCipher** (ADR-001); uploads are **per-file, not tar+gzip** (ADR-003); `init` collects **both bucket name and bucket ID** (bucket name for S3 + B2 download, bucket ID for B2 list/upload — ADR-010 supersedes ADR-004); typed errors live in `internal/apperr`, not a root `errors.go` (ADR-005).
 

@@ -14,25 +14,30 @@ import (
 	"backuprepo/internal/apperr"
 )
 
-// b2TestServer simulates the subset of the B2 v2 API the client uses.
+// b2TestServer simulates the subset of the B2 v3 API the client uses.
 func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	var base string
 
-	mux.HandleFunc("/b2api/v2/b2_authorize_account", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/b2api/v3/b2_authorize_account", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := r.BasicAuth(); !ok {
 			w.WriteHeader(401)
 			return
 		}
+		// v3 nests the storage-API endpoints under apiInfo.storageApi.
 		json.NewEncoder(w).Encode(map[string]any{
-			"apiUrl":              base,
-			"downloadUrl":         base,
-			"authorizationToken":  "test-token",
-			"recommendedPartSize": 100000000,
+			"authorizationToken": "test-token",
+			"apiInfo": map[string]any{
+				"storageApi": map[string]any{
+					"apiUrl":              base,
+					"downloadUrl":         base,
+					"recommendedPartSize": 100000000,
+				},
+			},
 		})
 	})
-	mux.HandleFunc("/b2api/v2/b2_get_upload_url", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/b2api/v3/b2_get_upload_url", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"uploadUrl":          base + "/upload",
 			"authorizationToken": "upload-token",
@@ -44,7 +49,7 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		store[name] = body
 		json.NewEncoder(w).Encode(map[string]any{"fileName": name, "fileId": "id-" + name})
 	})
-	mux.HandleFunc("/b2api/v2/b2_list_file_names", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/b2api/v3/b2_list_file_names", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Prefix        string `json:"prefix"`
 			Delimiter     string `json:"delimiter"`
@@ -88,9 +93,20 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"files": files, "nextFileName": nil})
 	})
-	mux.HandleFunc("/b2api/v2/b2_list_file_versions", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/b2api/v3/b2_list_file_versions", func(w http.ResponseWriter, r *http.Request) {
+		// Mirror real B2: reject a startFileId sent without (or with an empty)
+		// startFileName, which is what the first-page Delete request used to do.
+		var raw map[string]any
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &raw)
+		if sid, ok := raw["startFileId"]; ok {
+			if name, _ := raw["startFileName"].(string); name == "" || sid == "" {
+				w.WriteHeader(400)
+				return
+			}
+		}
 		var req struct{ Prefix string }
-		json.NewDecoder(r.Body).Decode(&req)
+		json.Unmarshal(body, &req)
 		type f struct {
 			FileName string `json:"fileName"`
 			FileID   string `json:"fileId"`
@@ -103,7 +119,7 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		}
 		json.NewEncoder(w).Encode(map[string]any{"files": files, "nextFileName": nil, "nextFileId": nil})
 	})
-	mux.HandleFunc("/b2api/v2/b2_delete_file_version", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/b2api/v3/b2_delete_file_version", func(w http.ResponseWriter, r *http.Request) {
 		var req struct{ FileName, FileId string }
 		json.NewDecoder(r.Body).Decode(&req)
 		delete(store, req.FileName)
@@ -123,14 +139,14 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		}
 		w.Write(data)
 	})
-	mux.HandleFunc("/b2api/v2/b2_start_large_file", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/b2api/v3/b2_start_large_file", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			FileName string `json:"fileName"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		json.NewEncoder(w).Encode(map[string]any{"fileId": "large-" + req.FileName, "fileName": req.FileName})
 	})
-	mux.HandleFunc("/b2api/v2/b2_get_upload_part_url", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/b2api/v3/b2_get_upload_part_url", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			FileId string `json:"fileId"`
 		}
@@ -144,7 +160,7 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		largeParts[fileID] = append(largeParts[fileID], body)
 		json.NewEncoder(w).Encode(map[string]any{"partNumber": len(largeParts[fileID])})
 	})
-	mux.HandleFunc("/b2api/v2/b2_finish_large_file", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/b2api/v3/b2_finish_large_file", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			FileID string `json:"fileId"`
 		}
