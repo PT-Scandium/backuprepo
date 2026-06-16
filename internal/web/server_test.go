@@ -51,6 +51,9 @@ func do(s *Server, method, target string, body string) *httptest.ResponseRecorde
 		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	r.Host = "127.0.0.1:9171" // satisfy the DNS-rebinding guard
+	if method == http.MethodPost {
+		r.Header.Set("Origin", "http://127.0.0.1:9171") // satisfy the CSRF check
+	}
 	rec := httptest.NewRecorder()
 	s.routes().ServeHTTP(rec, r)
 	return rec
@@ -92,6 +95,28 @@ func TestHostGuardRejectsNonLocalhost(t *testing.T) {
 	s.routes().ServeHTTP(rec, r)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 for non-localhost Host, got %d", rec.Code)
+	}
+}
+
+func TestCSRFRejectsCrossOriginPost(t *testing.T) {
+	s, _, _, _ := newTestServer(t)
+	// A cross-site form POST carries the attacker's Origin and must be rejected.
+	cross := httptest.NewRequest("POST", "/close", nil)
+	cross.Host = "127.0.0.1:9171"
+	cross.Header.Set("Origin", "http://evil.example.com")
+	rec := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec, cross)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin POST should be 403, got %d", rec.Code)
+	}
+
+	// A POST with no Origin/Referer is also rejected (fail closed).
+	none := httptest.NewRequest("POST", "/close", nil)
+	none.Host = "127.0.0.1:9171"
+	rec2 := httptest.NewRecorder()
+	s.routes().ServeHTTP(rec2, none)
+	if rec2.Code != http.StatusForbidden {
+		t.Fatalf("origin-less POST should be 403, got %d", rec2.Code)
 	}
 }
 

@@ -108,8 +108,35 @@ func (s *Server) requirePost(h http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		if !sameOrigin(r) {
+			http.Error(w, "forbidden: cross-origin request", http.StatusForbidden)
+			return
+		}
 		h(w, r)
 	}
+}
+
+// sameOrigin is the CSRF defense for the state-changing POST endpoints. The
+// Host-header guard stops DNS-rebinding but NOT a cross-site form POST (the
+// browser sends those with the real Host), so we additionally require the
+// request's Origin (or Referer, as a fallback) to match this server's host. A
+// cross-site attacker's page carries its own Origin and is rejected; the UI's
+// own forms carry ours. Requests with neither header are rejected too — the
+// UI's forms always send Origin, so only non-browser clients lack it, and those
+// should use the `bb` CLI rather than these endpoints.
+func sameOrigin(r *http.Request) bool {
+	src := r.Header.Get("Origin")
+	if src == "" {
+		src = r.Header.Get("Referer")
+	}
+	if src == "" {
+		return false
+	}
+	u, err := url.Parse(src)
+	if err != nil {
+		return false
+	}
+	return u.Host == r.Host
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
