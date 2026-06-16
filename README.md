@@ -8,6 +8,31 @@ A cross-platform CLI that backs up your files to a Backblaze B2 bucket — eithe
 
 ## Install
 
+### Download a prebuilt binary (v1.0.0)
+
+No Go toolchain needed — grab the static binary for your platform from the [**v1.0.0 release**](https://github.com/PT-Scandium/backuprepo/releases/tag/v1.0.0):
+
+| Platform | Download |
+|----------|----------|
+| Linux (x86-64) | [`bb-v1.0.0-linux-amd64`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.0/bb-v1.0.0-linux-amd64) |
+| Windows (x86-64) | [`bb-v1.0.0-windows-amd64.exe`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.0/bb-v1.0.0-windows-amd64.exe) |
+| Checksums | [`SHA256SUMS`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.0/SHA256SUMS) |
+
+**Linux:**
+
+```sh
+curl -LO https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.0/bb-v1.0.0-linux-amd64
+curl -LO https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.0/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing     # verify the download
+chmod +x bb-v1.0.0-linux-amd64
+sudo mv bb-v1.0.0-linux-amd64 /usr/local/bin/bb
+bb version                                   # -> bb 1.0.0
+```
+
+**Windows:** download `bb-v1.0.0-windows-amd64.exe` (optionally verify it against `SHA256SUMS`), rename it to `bb.exe`, and place it on your `PATH`.
+
+### Build from source
+
 Requires **Go 1.25+**. No CGO (pure-Go SQLite), so the build is a single **statically linked** binary that runs on any Linux host with no shared-library dependencies.
 
 ```sh
@@ -22,7 +47,7 @@ sudo make install PREFIX=/usr/local/bin    # install system-wide
 make clean | uninstall | test | help       # housekeeping targets
 ```
 
-No `make`? `go build -ldflags="-s -w" -o bb .` produces the same binary. The stripped binary is ~14 MB.
+No `make`? `go build -ldflags="-s -w" -o bb .` produces the same binary. The stripped binary is ~21 MB.
 
 > This guide uses the command **`bb`** (the installed name). If you only ran `make`, call it as `./bb` from the repo directory.
 
