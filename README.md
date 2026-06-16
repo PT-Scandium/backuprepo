@@ -2,7 +2,7 @@
 
 A cross-platform CLI that backs up your files to a Backblaze B2 bucket — either by **watching local folders** and uploading changed files, or by **manually pushing/pulling** individual files and folders. Credentials are stored encrypted in a local SQLite database, and it ships as a single static binary named **`bb`**.
 
-> **Status:** the core CLI is complete. The background daemon and web UI (`serve`/`start`/`stop`, port 9171) are planned — see [Roadmap](#roadmap-not-yet-implemented).
+> **Status:** the core CLI and the background daemon (`bb start`/`stop`) are complete. The web UI (`serve`, port 9171) is still planned — see [Roadmap](#roadmap-not-yet-implemented).
 
 ---
 
@@ -97,14 +97,32 @@ bb upload                       # upload changed files; no-op if nothing changed
 
 ```text
 $ bb upload
-Uploaded: 12, Skipped: 0, Failed: 0
+Uploaded: 12, Skipped: 0, Deleted: 0, Failed: 0
 $ bb upload            # second run, nothing changed
-Uploaded: 0, Skipped: 12, Failed: 0
+Uploaded: 0, Skipped: 12, Deleted: 0, Failed: 0
 ```
 
 Failed files are counted, don't abort the run, and make `bb` exit non-zero so scripts can detect a problem.
 
-> **Scheduled backups:** because `upload` is a safe no-op when nothing changed, run it from cron until the background daemon lands:
+**Run it continuously — the daemon:**
+
+```sh
+bb start            # watch folders and back up changes in real time (foreground; Ctrl-C to stop)
+bb stop             # signal a running daemon to shut down gracefully
+```
+
+`start` uses filesystem events (`fsnotify`) for near-real-time backups, with a full scan every 5 minutes as a safety net for anything the event stream misses. It runs in the foreground — background it with a systemd user unit or `nohup bb start &`. Only one daemon runs at a time (tracked via `~/backup_repo/daemon.pid`).
+
+**Propagating deletions (opt-in):** by default a deleted local file keeps its remote backup. Pass `--delete` to also remove remote objects whose local files were deleted:
+
+```sh
+bb upload --delete    # one-shot: also remove remotes for locally-deleted files
+bb start --delete     # continuously
+```
+
+This is destructive — on versioned buckets all versions are purged. As a safeguard, deletions are skipped for any watched folder that is currently **missing** (e.g. an unmounted drive), so a disconnected disk never wipes your backup.
+
+> **Or schedule it:** because `upload` is a safe no-op when nothing changed, you can run it from cron instead of the daemon:
 >
 > ```cron
 > */15 * * * * /home/me/.local/bin/bb upload >> ~/backup_repo/upload.log 2>&1
@@ -160,7 +178,9 @@ The applicationKey is masked (last 4 characters); the keyID is just an identifie
 | `bb unwatch <dir>` | Remove a directory from the watch list |
 | `bb list` | List watched folders and tracked files with last-backup times |
 | `bb status` | Configured? backend, watched-folder count, pending uploads |
-| `bb upload` | Upload every changed file in watched folders; no-op if nothing changed |
+| `bb upload [--delete]` | Upload every changed file; no-op if nothing changed. `--delete` also removes remotes for locally-deleted files |
+| `bb start [--delete]` | Run the watcher daemon (fsnotify + 5-min fallback scan) in the foreground until stopped |
+| `bb stop` | Signal a running daemon to shut down gracefully |
 | `bb backend [s3\|b2]` | Show or set the stored backend |
 | `bb ls [path] [-r]` | List bucket contents (folders shown with trailing `/`) |
 | `bb get <remote> [local] [-r]` | Download an object, or a prefix with `-r` |
@@ -194,12 +214,11 @@ The `key` file is the only plaintext secret on disk — protect it like a passwo
 
 ## Roadmap (not yet implemented)
 
-- **Background daemon** — real-time file watcher (`fsnotify`; `ReadDirectoryChangesW` on Windows) with a 5-minute full-scan fallback, uploading silently in the background.
-- **`bb start` / `bb stop`** — run/stop the daemon (with the web UI).
-- **`bb serve`** — start only the web UI.
 - **Web UI (port 9171)** — localhost interface showing folder contents, last-backup times, delete actions, and a force-upload button.
+- **`bb serve`** — start only the web UI.
+- **Windows daemon backend** — the watcher currently targets Linux (`fsnotify`/inotify + Unix signals); native Windows support needs `ReadDirectoryChangesW` and Windows signal handling.
 
-Design notes for all of the above live in `docs/superpowers/`.
+The background daemon (`bb start` / `bb stop`, with a 5-minute full-scan fallback) and opt-in deletion propagation (`--delete`) are **now implemented** — see [Folder backup](#4a-folder-backup-mode-1). Design notes live in `docs/superpowers/`.
 
 ---
 
