@@ -14,6 +14,7 @@ import (
 	"backuprepo/internal/store"
 )
 
+// seedBackend returns a fake backend pre-populated with an object per key.
 func seedBackend(ctx context.Context, keys ...string) *b2.FakeBackend {
 	be := b2.NewFake()
 	for _, k := range keys {
@@ -22,6 +23,7 @@ func seedBackend(ctx context.Context, keys ...string) *b2.FakeBackend {
 	return be
 }
 
+// TestLsGroupsFolders verifies Ls lists files and groups keys into folder prefixes.
 func TestLsGroupsFolders(t *testing.T) {
 	ctx := context.Background()
 	be := seedBackend(ctx, "a.txt", "photos/1.jpg", "photos/2.jpg")
@@ -35,6 +37,7 @@ func TestLsGroupsFolders(t *testing.T) {
 	}
 }
 
+// TestFindSubstring verifies Find returns only keys containing the query.
 func TestFindSubstring(t *testing.T) {
 	ctx := context.Background()
 	be := seedBackend(ctx, "report-2024.pdf", "photos/cat.jpg", "notes.txt")
@@ -48,6 +51,7 @@ func TestFindSubstring(t *testing.T) {
 	}
 }
 
+// TestGetWritesFile verifies Get downloads an object to the given local path.
 func TestGetWritesFile(t *testing.T) {
 	ctx := context.Background()
 	be := seedBackend(ctx, "dir/file.txt")
@@ -62,6 +66,7 @@ func TestGetWritesFile(t *testing.T) {
 	}
 }
 
+// TestPutUploadsFile verifies Put uploads a local file under the given remote key.
 func TestPutUploadsFile(t *testing.T) {
 	ctx := context.Background()
 	be := b2.NewFake()
@@ -76,6 +81,7 @@ func TestPutUploadsFile(t *testing.T) {
 	}
 }
 
+// TestRmConfirmAndForce verifies Rm honors a declined prompt and deletes with force.
 func TestRmConfirmAndForce(t *testing.T) {
 	ctx := context.Background()
 	be := seedBackend(ctx, "a.txt")
@@ -96,6 +102,7 @@ func TestRmConfirmAndForce(t *testing.T) {
 	}
 }
 
+// TestRmRecursive verifies Rm -r deletes every object under a prefix.
 func TestRmRecursive(t *testing.T) {
 	ctx := context.Background()
 	be := seedBackend(ctx, "p/1.txt", "p/2.txt", "q/3.txt")
@@ -108,6 +115,7 @@ func TestRmRecursive(t *testing.T) {
 	}
 }
 
+// TestBackendShowAndSet verifies Backend sets and then reports the stored backend.
 func TestBackendShowAndSet(t *testing.T) {
 	ctx := context.Background()
 	st := newStore(t)
@@ -126,6 +134,7 @@ func TestBackendShowAndSet(t *testing.T) {
 	}
 }
 
+// saveMinimalConfig stores a minimal valid config so backend operations have a row.
 func saveMinimalConfig(t *testing.T, st *store.Store) {
 	t.Helper()
 	err := st.SaveConfig(context.Background(), store.RemoteConfig{
@@ -136,6 +145,7 @@ func saveMinimalConfig(t *testing.T, st *store.Store) {
 	}
 }
 
+// TestGetRecursivePreservesStructure verifies Get -r recreates the remote tree locally.
 func TestGetRecursivePreservesStructure(t *testing.T) {
 	ctx := context.Background()
 	be := seedBackend(ctx, "docs/a.txt", "docs/sub/b.txt")
@@ -163,6 +173,7 @@ func TestGetRecursivePreservesStructure(t *testing.T) {
 	}
 }
 
+// TestGetRejectsTraversal verifies Get rejects keys that would escape the destination dir.
 func TestGetRejectsTraversal(t *testing.T) {
 	ctx := context.Background()
 	be := b2.NewFake()
@@ -178,6 +189,7 @@ func TestGetRejectsTraversal(t *testing.T) {
 	}
 }
 
+// TestPutDirWithoutRecursiveErrors verifies Put errors on a directory without -r.
 func TestPutDirWithoutRecursiveErrors(t *testing.T) {
 	ctx := context.Background()
 	be := b2.NewFake()

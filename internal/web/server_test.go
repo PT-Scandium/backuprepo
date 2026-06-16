@@ -15,6 +15,7 @@ import (
 	"backuprepo/internal/store"
 )
 
+// key32 returns a deterministic 32-byte test key.
 func key32() []byte {
 	k := make([]byte, 32)
 	for i := range k {
@@ -59,6 +60,8 @@ func do(s *Server, method, target string, body string) *httptest.ResponseRecorde
 	return rec
 }
 
+// TestIndexListsWatchedFolderAndFiles verifies the root lists the watched folder
+// and drilling in shows its files with a "never" backup status.
 func TestIndexListsWatchedFolderAndFiles(t *testing.T) {
 	s, _, _, dir := newTestServer(t)
 	if err := os.WriteFile(filepath.Join(dir, "report.txt"), []byte("hi"), 0o644); err != nil {
@@ -79,6 +82,7 @@ func TestIndexListsWatchedFolderAndFiles(t *testing.T) {
 	}
 }
 
+// TestPathTraversalRejected verifies a path outside any watched folder is rejected with 403.
 func TestPathTraversalRejected(t *testing.T) {
 	s, _, _, _ := newTestServer(t)
 	rec := do(s, "GET", "/?path="+url.QueryEscape("/etc"), "")
@@ -87,6 +91,7 @@ func TestPathTraversalRejected(t *testing.T) {
 	}
 }
 
+// TestHostGuardRejectsNonLocalhost verifies a non-localhost Host header is rejected with 403.
 func TestHostGuardRejectsNonLocalhost(t *testing.T) {
 	s, _, _, _ := newTestServer(t)
 	r := httptest.NewRequest("GET", "/", nil)
@@ -98,6 +103,8 @@ func TestHostGuardRejectsNonLocalhost(t *testing.T) {
 	}
 }
 
+// TestCSRFRejectsCrossOriginPost verifies POSTs with a cross-origin Origin or no
+// Origin/Referer are rejected with 403.
 func TestCSRFRejectsCrossOriginPost(t *testing.T) {
 	s, _, _, _ := newTestServer(t)
 	// A cross-site form POST carries the attacker's Origin and must be rejected.
@@ -120,6 +127,8 @@ func TestCSRFRejectsCrossOriginPost(t *testing.T) {
 	}
 }
 
+// TestUploadButtonBacksUp verifies the upload endpoint backs up a changed file
+// and redirects (303).
 func TestUploadButtonBacksUp(t *testing.T) {
 	s, _, fake, dir := newTestServer(t)
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("data"), 0o644); err != nil {
@@ -134,6 +143,8 @@ func TestUploadButtonBacksUp(t *testing.T) {
 	}
 }
 
+// TestDeleteRemovesLocalAndRemote verifies the delete endpoint removes the local
+// file, the remote object, and the DB record.
 func TestDeleteRemovesLocalAndRemote(t *testing.T) {
 	s, st, fake, dir := newTestServer(t)
 	ctx := context.Background()

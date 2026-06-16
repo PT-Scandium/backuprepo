@@ -17,10 +17,13 @@ import (
 	"backuprepo/internal/store"
 )
 
+// main runs the CLI and exits with its status code.
 func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+// run loads config, opens the store, dispatches the subcommand, and returns an
+// exit code (0 success, 1 error).
 func run(args []string) int {
 	ctx := context.Background()
 	cfg, err := config.Load(ctx)
@@ -44,12 +47,12 @@ func run(args []string) int {
 		err = cli.Init(ctx, st, os.Stdin, os.Stdout)
 	case "watch":
 		if len(rest) != 1 {
-			return fail(fmt.Errorf("usage: backuprepo watch /path/to/dir"))
+			return fail(fmt.Errorf("usage: bb watch /path/to/dir"))
 		}
 		err = cli.Watch(ctx, st, rest[0], os.Stdout)
 	case "unwatch":
 		if len(rest) != 1 {
-			return fail(fmt.Errorf("usage: backuprepo unwatch /path/to/dir"))
+			return fail(fmt.Errorf("usage: bb unwatch /path/to/dir"))
 		}
 		err = cli.Unwatch(ctx, st, rest[0], os.Stdout)
 	case "list":
@@ -86,7 +89,7 @@ func run(args []string) int {
 			return 1
 		}
 		if len(pos) < 1 {
-			return fail(fmt.Errorf("usage: backuprepo find <query> [prefix]"))
+			return fail(fmt.Errorf("usage: bb find <query> [prefix]"))
 		}
 		be, e := buildBackend(ctx, st, *backend)
 		if e != nil {
@@ -102,7 +105,7 @@ func run(args []string) int {
 			return 1
 		}
 		if len(pos) < 1 {
-			return fail(fmt.Errorf("usage: backuprepo get <remote> [local] [-r]"))
+			return fail(fmt.Errorf("usage: bb get <remote> [local] [-r]"))
 		}
 		be, e := buildBackend(ctx, st, *backend)
 		if e != nil {
@@ -118,7 +121,7 @@ func run(args []string) int {
 			return 1
 		}
 		if len(pos) < 1 {
-			return fail(fmt.Errorf("usage: backuprepo put <local> [remote] [-r]"))
+			return fail(fmt.Errorf("usage: bb put <local> [remote] [-r]"))
 		}
 		be, e := buildBackend(ctx, st, *backend)
 		if e != nil {
@@ -136,7 +139,7 @@ func run(args []string) int {
 			return 1
 		}
 		if len(pos) < 1 {
-			return fail(fmt.Errorf("usage: backuprepo rm <path> [-r] [-f]"))
+			return fail(fmt.Errorf("usage: bb rm <path> [-r] [-f]"))
 		}
 		be, e := buildBackend(ctx, st, *backend)
 		if e != nil {
@@ -151,12 +154,12 @@ func run(args []string) int {
 		err = cli.Backend(ctx, st, kind, os.Stdout)
 	case "bucket":
 		if len(rest) > 2 {
-			return fail(fmt.Errorf("usage: backuprepo bucket [<name> [<bucket-id>]]"))
+			return fail(fmt.Errorf("usage: bb bucket [<name> [<bucket-id>]]"))
 		}
 		err = cli.Bucket(ctx, st, argAt(rest, 0), argAt(rest, 1), os.Stdout)
 	case "appkey":
 		if len(rest) > 1 {
-			return fail(fmt.Errorf("usage: backuprepo appkey [<new-keyID>]  (secret read from stdin)"))
+			return fail(fmt.Errorf("usage: bb appkey [<new-keyID>]  (secret read from stdin)"))
 		}
 		err = cli.SetAppKey(ctx, st, argAt(rest, 0), os.Stdin, os.Stdout)
 	case "start":
@@ -209,6 +212,7 @@ func argAt(pos []string, i int) string {
 	return ""
 }
 
+// runUpload builds the effective backend and uploads all changed files.
 func runUpload(ctx context.Context, st *store.Store, deleteRemoved bool) error {
 	be, err := buildBackend(ctx, st, "")
 	if err != nil {
@@ -264,11 +268,12 @@ func buildBackend(ctx context.Context, st *store.Store, override string) (b2.Bac
 	})
 }
 
+// usage writes the command help text to w.
 func usage(w io.Writer) {
-	fmt.Fprint(w, `backuprepo — back up folders to Backblaze B2 (S3-compatible or native B2 API)
+	fmt.Fprint(w, `bb — back up folders to Backblaze B2 (S3-compatible or native B2 API)
 
 USAGE
-  backuprepo <command> [args] [flags]
+  bb <command> [args] [flags]
   (no command = status)
 
 SETUP
@@ -311,24 +316,25 @@ FLAGS
 
 EXAMPLES
   # First run + backup (default S3 mode)
-  backuprepo init
-  backuprepo watch ~/Documents
-  backuprepo upload
+  bb init
+  bb watch ~/Documents
+  bb upload
 
   # Native Backblaze B2 mode + manual file management
-  backuprepo backend b2
-  backuprepo ls -r
-  backuprepo put ./report.pdf reports/report.pdf
-  backuprepo get reports/report.pdf ./out.pdf
-  backuprepo find report
-  backuprepo rm reports/ -r
+  bb backend b2
+  bb ls -r
+  bb put ./report.pdf reports/report.pdf
+  bb get reports/report.pdf ./out.pdf
+  bb find report
+  bb rm reports/ -r
   # one-off override without changing the stored mode:
-  backuprepo ls --backend s3
+  bb ls --backend s3
 
 State: ~/backup_repo/ (backup.db, key).   Exit codes: 0 ok, 1 error (message on stderr).   Docs: README.md
 `)
 }
 
+// fail prints err to stderr and returns exit code 1.
 func fail(err error) int {
 	fmt.Fprintln(os.Stderr, "error:", err)
 	return 1

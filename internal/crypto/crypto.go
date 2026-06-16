@@ -44,6 +44,7 @@ func Open(key, data []byte) ([]byte, error) {
 	return plain, nil
 }
 
+// newGCM builds an AES-256-GCM AEAD from key, rejecting any key that isn't KeySize bytes.
 func newGCM(key []byte) (cipher.AEAD, error) {
 	if len(key) != KeySize {
 		return nil, fmt.Errorf("%w: key must be %d bytes, got %d", apperr.ErrCrypto, KeySize, len(key))

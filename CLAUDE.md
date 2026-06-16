@@ -73,18 +73,18 @@ A cross-platform file backup tool that watches user-specified folders and silent
 The primary user interface. All interaction via a single `backuprepo` binary with subcommands. No external dependencies or frameworks — use Go's `flag` package or minimal argument parsing to keep the binary small (**target < 10 MB**).
 
 ```
-backuprepo                     # First run: interactive setup (credentials, server, folder)
-                               # Subsequent runs: start daemon/watcher in foreground
-backuprepo init                # Re-run first-time setup (reconfigure credentials/server/folder)
-backuprepo watch /path/to/dir  # Add a folder to watch list
-backuprepo unwatch /path/to/dir # Remove a folder from watch list
-backuprepo list                # List all watched folders and their status
-backuprepo status              # Show daemon status, last scan time, pending uploads
-backuprepo upload              # Force-upload all changed files now (no-op if nothing changed)
-backuprepo serve               # Start web UI on port 9171 (without starting daemon)
-backuprepo start               # Start daemon + web UI together
-backuprepo stop                # Stop the running daemon gracefully
-backuprepo config              # Show current configuration (server URL, watched folders)
+bb                       # First run: interactive setup (credentials, server, folder)
+                         # Subsequent runs: start daemon/watcher in foreground
+bb init                  # Re-run first-time setup (reconfigure credentials/server/folder)
+bb watch /path/to/dir    # Add a folder to watch list
+bb unwatch /path/to/dir  # Remove a folder from watch list
+bb list                  # List all watched folders and their status
+bb status                # Show daemon status, last scan time, pending uploads
+bb upload                # Force-upload all changed files now (no-op if nothing changed)
+bb serve                 # Start web UI on port 9171 (without starting daemon)
+bb start                 # Start daemon + web UI together
+bb stop                  # Stop the running daemon gracefully
+bb config                # Show current configuration (server URL, watched folders)
 ```
 
 - Output is plain text to console — no colors, no spinners, no TUI libraries
@@ -121,7 +121,7 @@ This repository is feature-complete against the spec above (see Implementation s
 The spec above is the original aspirational design. **As of 2026-06-16 the project is feature-complete against this spec** — everything below is implemented and merged to `master` (Go packages under `internal/{apperr,crypto,config,store,b2,backup,daemon,web,cli}` + `main.go`):
 
 - **Core CLI** — `init`, `watch`, `unwatch`, `list`, `status`, `upload`, `config`.
-- **Dual backend** — `S3Backend` (aws-sdk) and a **native `B2Backend`** (B2 **v3** API over stdlib `net/http`) behind a unified `b2.Backend` interface. Switch with `backuprepo backend [s3|b2]` (default `s3`) or per-command `--backend s3|b2`.
+- **Dual backend** — `S3Backend` (aws-sdk) and a **native `B2Backend`** (B2 **v3** API over stdlib `net/http`) behind a unified `b2.Backend` interface. Switch with `bb backend [s3|b2]` (default `s3`) or per-command `--backend s3|b2`.
 - **Manual bucket commands** — `ls`, `get`, `put`, `rm`, `find`, `backend`.
 - **Partial reconfig (no full `init`)** — `bucket [<name> [<id>]]` switches the destination bucket; `appkey [<new-keyID>]` rotates the application key (secret read from stdin, never argv).
 - **Background daemon** — `start` / `stop`: real-time `fsnotify` watcher + 1s/5s debounce + 5-minute fallback scan, PID-file lifecycle. **Runs on Linux and Windows** (OS-specific signal/stop logic in build-tagged `internal/daemon/signals_{unix,windows}.go`; Windows `stop` is forceful).

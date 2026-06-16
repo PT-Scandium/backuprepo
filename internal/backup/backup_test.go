@@ -11,6 +11,7 @@ import (
 	"backuprepo/internal/store"
 )
 
+// key32 returns a deterministic 32-byte encryption key for tests.
 func key32() []byte {
 	k := make([]byte, 32)
 	for i := range k {
@@ -19,6 +20,7 @@ func key32() []byte {
 	return k
 }
 
+// newSvc builds a Service backed by a temp store and a fake backend for tests.
 func newSvc(t *testing.T) (*Service, *store.Store, *b2.FakeBackend) {
 	t.Helper()
 	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "b.db"), key32())
@@ -30,6 +32,7 @@ func newSvc(t *testing.T) (*Service, *store.Store, *b2.FakeBackend) {
 	return New(st, fake), st, fake
 }
 
+// writeFile writes content to path, failing the test on error.
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -37,6 +40,7 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+// TestUploadChangedUploadsNewFiles verifies a new file is uploaded once.
 func TestUploadChangedUploadsNewFiles(t *testing.T) {
 	svc, st, fake := newSvc(t)
 	ctx := context.Background()
@@ -58,6 +62,7 @@ func TestUploadChangedUploadsNewFiles(t *testing.T) {
 	}
 }
 
+// TestUploadChangedSkipsUnchanged verifies an unchanged file is skipped on re-run.
 func TestUploadChangedSkipsUnchanged(t *testing.T) {
 	svc, st, _ := newSvc(t)
 	ctx := context.Background()
@@ -77,6 +82,7 @@ func TestUploadChangedSkipsUnchanged(t *testing.T) {
 	}
 }
 
+// TestUploadChangedReuploadsOnContentChange verifies a changed file is re-uploaded.
 func TestUploadChangedReuploadsOnContentChange(t *testing.T) {
 	svc, st, _ := newSvc(t)
 	ctx := context.Background()
@@ -102,6 +108,7 @@ func TestUploadChangedReuploadsOnContentChange(t *testing.T) {
 	}
 }
 
+// TestPendingCount verifies PendingCount reports the number of changed files.
 func TestPendingCount(t *testing.T) {
 	svc, st, _ := newSvc(t)
 	ctx := context.Background()
@@ -119,11 +126,13 @@ func TestPendingCount(t *testing.T) {
 	}
 }
 
+// mustTime returns a timestamp safely in the future for bumping file mtimes.
 func mustTime(t *testing.T) time.Time {
 	t.Helper()
 	return time.Now().Add(2 * time.Second)
 }
 
+// TestDeletionPropagationDisabledByDefault verifies deletions do not propagate without a deleter.
 func TestDeletionPropagationDisabledByDefault(t *testing.T) {
 	svc, st, fake := newSvc(t)
 	ctx := context.Background()
@@ -149,6 +158,7 @@ func TestDeletionPropagationDisabledByDefault(t *testing.T) {
 	}
 }
 
+// TestDeletionPropagationRemovesRemoteAndRecord verifies a locally deleted file's remote object and record are removed when a deleter is configured.
 func TestDeletionPropagationRemovesRemoteAndRecord(t *testing.T) {
 	svc, st, fake := newSvc(t)
 	svc = svc.WithDeleter(fake)

@@ -32,10 +32,12 @@ No `make`? `go build -ldflags="-s -w" -o bb .` produces the same binary. The str
 
 There are two ways to use `bb`, sharing one setup:
 
-- **Folder backup** *(mode 1)* — watch folders; `upload` sends whatever changed.
+- **Folder backup** *(mode 1)* — watch folders; `upload` (or the **daemon**, see below) sends whatever changed.
 - **Manual file operations** *(mode 2)* — `put`/`get`/`ls`/`rm`/`find` act directly on the bucket.
 
 Follow steps 1–3 once, then use mode 1, mode 2, or both.
+
+> **One bucket at a time.** `bb` is configured for a single destination bucket — every command (`upload`, the daemon, `ls`/`put`/`get`/`rm`/`find`) acts on that one bucket. There is no multi-bucket mode. To work with a different bucket, point `bb` at it with `bb bucket <name> <id>` (the stored key must have access to it; if it needs different credentials, re-run `bb init`) — see the **Switch buckets later** note in step 2.
 
 ### 1. Get your Backblaze B2 credentials
 
@@ -111,14 +113,34 @@ Uploaded: 0, Skipped: 12, Deleted: 0, Failed: 0
 
 Failed files are counted, don't abort the run, and make `bb` exit non-zero so scripts can detect a problem.
 
-**Run it continuously — the daemon:**
+**Daemon mode (real-time backups) — turn it on with `bb start`:**
 
 ```sh
-bb start            # watch folders and back up changes in real time (foreground; Ctrl-C to stop)
-bb stop             # signal a running daemon to shut down gracefully
+bb start            # turn ON daemon mode: watch all folders, back up changes in real time
+bb stop             # turn it OFF: signal the running daemon to shut down gracefully
 ```
 
-`start` uses filesystem events (`fsnotify`) for near-real-time backups, with a full scan every 5 minutes as a safety net for anything the event stream misses. It runs in the foreground — background it with a systemd user unit or `nohup bb start &`. Only one daemon runs at a time (tracked via `~/backup_repo/daemon.pid`).
+`bb start` *is* daemon mode: it watches your folders via filesystem events (`fsnotify`) for near-real-time backups, plus a full scan every 5 minutes as a safety net for anything the event stream misses. It runs in the **foreground** (you see activity; `Ctrl-C` stops it).
+
+To keep the daemon running in the background and across logins, use your OS service manager — e.g. a **systemd user unit** on Linux:
+
+```ini
+# ~/.config/systemd/user/backuprepo.service
+[Unit]
+Description=backuprepo daemon
+[Service]
+ExecStart=%h/.local/bin/bb start
+Restart=on-failure
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user enable --now backuprepo    # start now and on every login
+systemctl --user stop backuprepo            # stop it
+```
+
+For a quick one-off detached run instead: `nohup bb start &`. Either way, only **one** daemon runs at a time (guarded by `~/backup_repo/daemon.pid`); `bb stop` (or `systemctl --user stop`) ends it.
 
 Runs on **Linux and Windows**, and `bb stop` is graceful on both (the daemon removes its PID file and closes cleanly): Linux via `SIGTERM`, Windows via a named stop event (falling back to a forceful terminate only if that event is unavailable). Foreground **Ctrl-C** also stops it cleanly on either OS.
 

@@ -13,7 +13,7 @@ import (
 )
 
 // Start runs the file-watching daemon in the foreground until stopped. dir is
-// ~/backup_repo (for the PID file). It blocks until Ctrl-C or `backuprepo stop`.
+// ~/backup_repo (for the PID file). It blocks until Ctrl-C or `bb stop`.
 // When deleteRemoved is set, the daemon also removes remote objects whose local
 // files were deleted (opt-in; destructive).
 func Start(ctx context.Context, st *store.Store, be b2.Backend, deleteRemoved bool, dir string, out io.Writer) error {

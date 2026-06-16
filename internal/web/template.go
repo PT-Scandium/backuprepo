@@ -33,6 +33,7 @@ type pageData struct {
 	Message  string
 }
 
+// render writes the main page HTML for data, sending a 500 if templating fails.
 func render(w http.ResponseWriter, data pageData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := pageTmpl.Execute(w, data); err != nil {
@@ -40,6 +41,7 @@ func render(w http.ResponseWriter, data pageData) {
 	}
 }
 
+// renderClosed writes the "web UI has been closed" confirmation page.
 func renderClosed(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = closedTmpl.Execute(w, nil)
@@ -81,10 +83,10 @@ a.folder:hover{text-decoration:underline}
 `
 
 var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>backuprepo</title><style>` + baseCSS + `</style></head>
+<html><head><meta charset="utf-8"><title>bb</title><style>` + baseCSS + `</style></head>
 <body>
 <header>
-  <h1>backuprepo</h1>
+  <h1>bb</h1>
   <div class="meta">User <b>{{.Username}}</b> &nbsp;·&nbsp; Server <b>{{.Location}}</b></div>
 </header>
 <main>
@@ -129,5 +131,5 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html>
 </body></html>`))
 
 var closedTmpl = template.Must(template.New("closed").Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><title>backuprepo — closed</title><style>` + baseCSS + `</style></head>
-<body><header><h1>backuprepo</h1></header><main><div class="msg">The web UI has been closed. You can shut this tab.</div></main></body></html>`))
+<html><head><meta charset="utf-8"><title>bb — closed</title><style>` + baseCSS + `</style></head>
+<body><header><h1>bb</h1></header><main><div class="msg">The web UI has been closed. You can shut this tab.</div></main></body></html>`))
