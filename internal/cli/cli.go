@@ -161,6 +161,29 @@ func Config(ctx context.Context, st *store.Store, out io.Writer) error {
 	return nil
 }
 
+// Bucket shows the current bucket (no name) or switches to another bucket,
+// changing only the bucket name + ID and leaving credentials, endpoint, region,
+// and backend untouched. An empty id clears the stored bucket ID (S3-only).
+func Bucket(ctx context.Context, st *store.Store, name, id string, out io.Writer) error {
+	if name == "" {
+		cfg, err := st.GetConfig(ctx)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Bucket:    %s\nBucket ID: %s\n", cfg.Bucket, cfg.BucketID)
+		return nil
+	}
+	if err := st.SetBucket(ctx, name, id); err != nil {
+		return err
+	}
+	if id == "" {
+		fmt.Fprintf(out, "Bucket set to %s (bucket ID cleared)\n", name)
+	} else {
+		fmt.Fprintf(out, "Bucket set to %s (id %s)\n", name, id)
+	}
+	return nil
+}
+
 // Upload force-scans watched folders and uploads changed files. When
 // deleteRemoved is set, it also removes remote objects whose local files were
 // deleted (opt-in; destructive).
