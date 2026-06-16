@@ -2,7 +2,7 @@
 
 A cross-platform CLI that backs up your files to a Backblaze B2 bucket — either by **watching local folders** and uploading changed files, or by **manually pushing/pulling** individual files and folders. Credentials are stored encrypted in a local SQLite database, and it ships as a single static binary named **`bb`**.
 
-> **Status:** the core CLI and the background daemon (`bb start`/`stop`) are complete. The web UI (`serve`, port 9171) is still planned — see [Roadmap](#roadmap-not-yet-implemented).
+> **Status:** feature-complete against the original spec — core CLI, dual backend, the background daemon (`bb start`/`stop`, Linux + Windows), and the localhost web UI (`bb serve`, port 9171) are all built.
 
 ---
 
@@ -192,6 +192,7 @@ The applicationKey is masked (last 4 characters); the keyID is just an identifie
 | `bb upload [--delete]` | Upload every changed file; no-op if nothing changed. `--delete` also removes remotes for locally-deleted files |
 | `bb start [--delete]` | Run the watcher daemon (fsnotify + 5-min fallback scan) in the foreground until stopped |
 | `bb stop` | Signal a running daemon to shut down gracefully |
+| `bb serve` | Start the localhost web UI on `http://127.0.0.1:9171` (foreground) |
 | `bb backend [s3\|b2]` | Show or set the stored backend |
 | `bb ls [path] [-r]` | List bucket contents (folders shown with trailing `/`) |
 | `bb get <remote> [local] [-r]` | Download an object, or a prefix with `-r` |
@@ -223,12 +224,36 @@ The `key` file is the only plaintext secret on disk — protect it like a passwo
 
 ---
 
-## Roadmap (not yet implemented)
+## Web UI — `bb serve`
 
-- **Web UI (port 9171)** — localhost interface showing folder contents, last-backup times, delete actions, and a force-upload button.
-- **`bb serve`** — start only the web UI.
+```sh
+bb serve     # serves http://127.0.0.1:9171 in the foreground (Ctrl-C or the Close button to stop)
+```
 
-The background daemon (`bb start` / `bb stop`, with a 5-minute full-scan fallback; runs on **Linux and Windows**) and opt-in deletion propagation (`--delete`) are **now implemented** — see [Folder backup](#4a-folder-backup-mode-1). Design notes live in `docs/superpowers/`.
+A warm-themed localhost page for browsing your watched folders and their backup state. It shows your username and the server location at the top, then a table of the current folder's contents:
+
+| Column | Meaning |
+|--------|---------|
+| Filename | File or folder (click a folder to drill in; breadcrumb to go back) |
+| File Type | Extension, or `folder` |
+| File Size | Human-readable |
+| Last Modified | Local modification time |
+| Modified By | OS file owner (Unix; `—` on Windows) |
+| Last Backup | Time of last successful upload, or `never` |
+| Actions | 🗑️ delete |
+
+Two buttons at the bottom: **Upload changed files** (runs a backup now) and **Close** (stops the server).
+
+**Security & scope:**
+- Binds to **`127.0.0.1` only**, with **no authentication** (you're already authenticated by the stored credentials). A `Host`-header check rejects non-localhost requests (DNS-rebinding guard).
+- Browsing and deletion are **confined to your watched folders** — the UI cannot reach arbitrary paths.
+- ⚠️ **The 🗑️ action is destructive and unrecoverable: it deletes the file (or folder) from *both* this computer and the backup bucket.** The page asks you to confirm first.
+
+---
+
+## Roadmap
+
+Feature-complete against the original spec. Design notes live in `docs/superpowers/`. Possible future enhancements (not blocking): graceful `bb stop` on Windows (named event), no-echo interactive entry for `bb appkey`, and a leaner binary.
 
 ---
 

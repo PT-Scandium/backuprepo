@@ -92,11 +92,22 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   - The file-watching half was already cross-platform (`fsnotify` → `ReadDirectoryChangesW` on Windows); only signals/process control needed splitting.
 - **Notes**: Windows `stop` is forceful (no graceful cleanup) — tolerated by the idempotent design (stale PID self-heals, upload retried). README updated with the Linux/Windows stop semantics. No platform-specific tests (can't portably kill self); the cross-compile build is the gate. Graceful Windows stop (named event via `x/sys/windows`) is a possible future enhancement.
 
+### 2026-06-16 - Web UI (`bb serve`, port 9171)
+- **Status**: Implemented on branch `feat/web-ui` (off `master`). `go test ./...` green; `GOOS=windows` build passes; live-verified end to end (listing, traversal 403, Host-guard 403, Close shutdown).
+- **Description**: Built the localhost web UI — the last spec feature (see ADR-015). New `internal/web` package over stdlib `net/http` + `html/template` (no new dep):
+  - `bb serve` runs it in the foreground on `127.0.0.1:9171` until Ctrl-C or the Close button (graceful `srv.Shutdown`). `bb start` left daemon-only.
+  - Warm-themed page: header shows OS username + server location; breadcrumb folder navigation; table per the spec (Filename, File Type, File Size, Last Modified, Modified By [OS owner], Last Backup, Actions); Upload + Close buttons.
+  - **Security:** `127.0.0.1`-only bind, no auth (per spec), Host-header guard (DNS-rebinding), browsing/deletion **confined to watched folders** (lexical `filepath.Rel`).
+  - **Delete = local file + remote object**, unrecoverable, behind a JS `confirm()`; dir delete purges all tracked files' remotes then `RemoveAll`s the tree.
+  - OS owner via build-tagged `owner_unix.go` / `owner_windows.go` (Windows stub `—`).
+  - Tests (`server_test.go`, httptest): listing, traversal 403, Host-guard 403, Upload backs up, Delete removes local+remote+record.
+- **Notes**: Wires `cli.Serve` + `main.go` `case "serve"` + `runServe`. README, key_facts, ADR-015 updated. With this, the project is **feature-complete against `CLAUDE.md`**.
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).
 - ~~**Daemon watcher + `start`/`stop`**~~ — BUILT 2026-06-16 (working tree; see work log + ADR-012): fsnotify recursive watch + 5-min fallback scan + 1s/5s debounce, graceful shutdown.
-- **Web UI / `serve` (port 9171)** — still not built. Localhost interface: folder table, last-backup times, delete actions, force-upload button (designed in `CLAUDE.md`).
+- ~~**Web UI / `serve` (port 9171)**~~ — DONE 2026-06-16 (branch `feat/web-ui`; see work log + ADR-015): localhost-only, Host-guarded, watched-folder-confined; Upload/Close + destructive local+remote delete. **This was the last spec feature — backuprepo is now feature-complete against `CLAUDE.md`.**
 - ~~**Windows daemon backend**~~ — DONE 2026-06-16 (branch `feat/windows-daemon`; see work log + ADR-014): build-tagged `signals_{unix,windows}.go`; fsnotify already provided `ReadDirectoryChangesW`, so only signals/process control needed splitting. Windows `stop` is forceful.
 - ~~**Deletion propagation**~~ — DONE 2026-06-16 (working tree; see work log + ADR-013): opt-in `--delete` on `upload`/`start`, with an unmounted-folder safety guard.
 - **Minor follow-ups from final review** — `b2.Uploader.Exists` and the `size` param are unused forward-looking hooks; a couple of cosmetic nits (`copyInto` wrapper, `usage(*os.File)` vs `io.Writer`).
