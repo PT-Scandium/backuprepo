@@ -120,6 +120,8 @@ bb stop             # signal a running daemon to shut down gracefully
 
 `start` uses filesystem events (`fsnotify`) for near-real-time backups, with a full scan every 5 minutes as a safety net for anything the event stream misses. It runs in the foreground — background it with a systemd user unit or `nohup bb start &`. Only one daemon runs at a time (tracked via `~/backup_repo/daemon.pid`).
 
+Runs on **Linux and Windows**. On Linux, `bb stop` (and `SIGTERM`) shuts the daemon down gracefully; on Windows, in-foreground **Ctrl-C** is graceful, while a cross-process `bb stop` is a forceful terminate (an interrupted upload is just retried next run). On either OS, `Ctrl-C` in the foreground is the cleanest stop.
+
 **Propagating deletions (opt-in):** by default a deleted local file keeps its remote backup. Pass `--delete` to also remove remote objects whose local files were deleted:
 
 ```sh
@@ -225,9 +227,8 @@ The `key` file is the only plaintext secret on disk — protect it like a passwo
 
 - **Web UI (port 9171)** — localhost interface showing folder contents, last-backup times, delete actions, and a force-upload button.
 - **`bb serve`** — start only the web UI.
-- **Windows daemon backend** — the watcher currently targets Linux (`fsnotify`/inotify + Unix signals); native Windows support needs `ReadDirectoryChangesW` and Windows signal handling.
 
-The background daemon (`bb start` / `bb stop`, with a 5-minute full-scan fallback) and opt-in deletion propagation (`--delete`) are **now implemented** — see [Folder backup](#4a-folder-backup-mode-1). Design notes live in `docs/superpowers/`.
+The background daemon (`bb start` / `bb stop`, with a 5-minute full-scan fallback; runs on **Linux and Windows**) and opt-in deletion propagation (`--delete`) are **now implemented** — see [Folder backup](#4a-folder-backup-mode-1). Design notes live in `docs/superpowers/`.
 
 ---
 

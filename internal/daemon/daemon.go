@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -72,7 +71,7 @@ func (d *Daemon) EnableDeletions(del b2.Deleter) {
 // while the daemon is up does not take effect until it is restarted — the
 // periodic scan will still cover folders already watched at start.
 func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(ctx, shutdownSignals()...)
 	defer stop()
 
 	if err := writePID(dir); err != nil {
@@ -264,10 +263,10 @@ func Stop(dir string, out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("%w: find process %d: %v", apperr.ErrDaemon, pid, err)
 	}
-	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		return fmt.Errorf("%w: signal pid %d: %v", apperr.ErrDaemon, pid, err)
+	if err := signalStop(proc); err != nil {
+		return fmt.Errorf("%w: stop pid %d: %v", apperr.ErrDaemon, pid, err)
 	}
-	fmt.Fprintf(out, "Sent stop signal to daemon (pid %d).\n", pid)
+	fmt.Fprintf(out, "Stopping daemon (pid %d).\n", pid)
 	return nil
 }
 
@@ -285,13 +284,3 @@ func writePID(dir string) error {
 }
 
 func removePID(dir string) { _ = os.Remove(pidPath(dir)) }
-
-// processAlive reports whether pid refers to a running process. On Unix,
-// os.FindProcess always succeeds, so liveness is probed with signal 0.
-func processAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	return proc.Signal(syscall.Signal(0)) == nil
-}
