@@ -103,6 +103,13 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   - Tests (`server_test.go`, httptest): listing, traversal 403, Host-guard 403, Upload backs up, Delete removes local+remote+record.
 - **Notes**: Wires `cli.Serve` + `main.go` `case "serve"` + `runServe`. README, key_facts, ADR-015 updated. With this, the project is **feature-complete against `CLAUDE.md`**.
 
+### 2026-06-16 - Graceful Windows stop + no-echo appkey entry
+- **Status**: Implemented on branch `feat/graceful-win-stop-noecho` (off `master`). Linux `go test ./...` green; `GOOS=windows` build + vet pass; piped `appkey` smoke-verified.
+- **Description**: The two "optional polish" items (see ADR-016):
+  - **Graceful Windows `stop`**: daemon creates a per-PID named event (`Local\backuprepo-daemon-stop-<pid>`) and waits on it (`installStopWatcher`, build-tagged); `bb stop` `SetEvent`s it so `Run` returns through normal deferred cleanup (PID file removed). `proc.Kill` kept as fallback. `Run` gained an `extStop` select case; Unix `installStopWatcher` is a no-op (SIGTERM unchanged). Uses `golang.org/x/sys/windows` (already transitive).
+  - **No-echo `appkey`**: `cli.readSecret` uses `golang.org/x/term.ReadPassword` when stdin is a terminal, else a line read (keeps piping + tests working). New module `golang.org/x/term`.
+- **Notes**: Windows event code verified by cross-compile (no Windows host to run on); existing `appkey` tests still pass via the fallback path. README, key_facts, ADR-016 updated; ADR-014's forceful-stop note marked superseded.
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).

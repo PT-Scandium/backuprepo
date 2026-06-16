@@ -13,6 +13,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"golang.org/x/term"
+
 	"backuprepo/internal/apperr"
 	"backuprepo/internal/b2"
 	"backuprepo/internal/backup"
@@ -196,9 +198,10 @@ func SetAppKey(ctx context.Context, st *store.Store, newKeyID string, in io.Read
 	if !ok {
 		return apperr.ErrNotConfigured
 	}
-	fmt.Fprint(out, "New applicationKey (paste, or pipe via stdin): ")
-	line, _ := bufio.NewReader(in).ReadString('\n')
-	appKey := strings.TrimSpace(line)
+	appKey, err := readSecret("New applicationKey (input hidden; or pipe via stdin): ", in, out)
+	if err != nil {
+		return err
+	}
 	if appKey == "" {
 		return fmt.Errorf("%w: empty applicationKey", apperr.ErrInvalidCredentials)
 	}
@@ -224,6 +227,25 @@ func Upload(ctx context.Context, st *store.Store, be b2.Backend, deleteRemoved b
 	fmt.Fprintf(out, "Uploaded: %d, Skipped: %d, Deleted: %d, Failed: %d\n",
 		res.Uploaded, res.Skipped, res.Deleted, res.Failed)
 	return err
+}
+
+// readSecret reads a secret from in, writing prompt to out first. When in is an
+// interactive terminal the input is read WITHOUT echo so the secret never
+// appears on screen or in terminal scrollback; otherwise (piped input, tests) it
+// reads a single line. This keeps `pass show … | bb appkey` and the unit tests
+// working while hiding the secret during interactive entry.
+func readSecret(prompt string, in io.Reader, out io.Writer) (string, error) {
+	fmt.Fprint(out, prompt)
+	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		b, err := term.ReadPassword(int(f.Fd()))
+		fmt.Fprintln(out) // ReadPassword swallows the Enter keypress; emit the newline
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	return strings.TrimSpace(line), nil
 }
 
 func mask(secret string) string {

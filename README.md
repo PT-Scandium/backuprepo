@@ -66,7 +66,7 @@ Watching /home/me/Documents
 - **Using only the native B2 backend?** Leave **endpoint** and **region** blank; they're used by the S3 backend only. (Required: keyID, applicationKey, bucket name. The bucket ID is required for the `b2` backend.)
 - **Stay configured:** credentials persist encrypted on disk, so you never log in interactively again — each command silently re-authorizes with Backblaze using the saved key. You only re-run `init` if the key changes or is revoked.
 - **Switch buckets later:** to point `bb` at a *different* bucket without re-entering credentials, use `bb bucket <name> <id>` (or `bb bucket <name>` for an S3-only bucket). It changes only the bucket name + ID. Note: the stored key must have access to the new bucket — a bucket-scoped key won't, so for a bucket under a different key, re-run `init` instead.
-- **Rotate the application key:** `bb appkey` reads a new applicationKey from **stdin** (so the secret stays out of `argv` and shell history) and replaces the stored one. Pipe it from a secret store rather than typing it, and pass the new keyID to rotate the whole pair:
+- **Rotate the application key:** `bb appkey` reads a new applicationKey from **stdin** (so the secret stays out of `argv` and shell history) and replaces the stored one. When you run it interactively the input is **not echoed** to the screen; you can also pipe it from a secret store, and pass the new keyID to rotate the whole pair:
   ```sh
   pass show backblaze/b2-key | bb appkey 0005newkeyid   # rotate keyID + secret
   bb appkey                                             # change only the secret (prompts on stdin)
@@ -120,7 +120,7 @@ bb stop             # signal a running daemon to shut down gracefully
 
 `start` uses filesystem events (`fsnotify`) for near-real-time backups, with a full scan every 5 minutes as a safety net for anything the event stream misses. It runs in the foreground — background it with a systemd user unit or `nohup bb start &`. Only one daemon runs at a time (tracked via `~/backup_repo/daemon.pid`).
 
-Runs on **Linux and Windows**. On Linux, `bb stop` (and `SIGTERM`) shuts the daemon down gracefully; on Windows, in-foreground **Ctrl-C** is graceful, while a cross-process `bb stop` is a forceful terminate (an interrupted upload is just retried next run). On either OS, `Ctrl-C` in the foreground is the cleanest stop.
+Runs on **Linux and Windows**, and `bb stop` is graceful on both (the daemon removes its PID file and closes cleanly): Linux via `SIGTERM`, Windows via a named stop event (falling back to a forceful terminate only if that event is unavailable). Foreground **Ctrl-C** also stops it cleanly on either OS.
 
 **Propagating deletions (opt-in):** by default a deleted local file keeps its remote backup. Pass `--delete` to also remove remote objects whose local files were deleted:
 
@@ -253,7 +253,7 @@ Two buttons at the bottom: **Upload changed files** (runs a backup now) and **Cl
 
 ## Roadmap
 
-Feature-complete against the original spec. Design notes live in `docs/superpowers/`. Possible future enhancements (not blocking): graceful `bb stop` on Windows (named event), no-echo interactive entry for `bb appkey`, and a leaner binary.
+Feature-complete against the original spec. Design notes live in `docs/superpowers/`. The remaining possible enhancement (not blocking) is a leaner binary; graceful Windows `bb stop` and no-echo `bb appkey` entry are now implemented.
 
 ---
 

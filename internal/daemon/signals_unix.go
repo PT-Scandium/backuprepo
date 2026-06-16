@@ -3,9 +3,17 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"syscall"
 )
+
+// installStopWatcher is a no-op on Unix: a graceful `stop` is delivered as
+// SIGTERM and handled by Run's signal.NotifyContext, so there's no extra
+// channel to watch. A nil channel is never selected.
+func installStopWatcher(_ context.Context) (<-chan struct{}, func(), error) {
+	return nil, func() {}, nil
+}
 
 // shutdownSignals are the signals that trigger a graceful daemon shutdown on
 // Unix: Ctrl-C (SIGINT) and the conventional `kill` signal (SIGTERM).

@@ -79,6 +79,15 @@ func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
 	}
 	defer removePID(dir)
 
+	// An external `stop` request closes extStop, letting the daemon shut down
+	// through its normal deferred cleanup. On Unix this is nil (the SIGTERM path
+	// above handles stop); on Windows it's backed by a named event.
+	extStop, cleanupStop, err := installStopWatcher(ctx)
+	if err != nil {
+		fmt.Fprintf(out, "warning: stop watcher unavailable: %v\n", err)
+	}
+	defer cleanupStop()
+
 	folders, err := d.store.ListFolders(ctx)
 	if err != nil {
 		return err
@@ -116,6 +125,10 @@ func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
 		select {
 		case <-ctx.Done():
 			fmt.Fprintln(out, "Shutting down.")
+			return nil
+
+		case <-extStop:
+			fmt.Fprintln(out, "Stop requested; shutting down.")
 			return nil
 
 		case ev, ok := <-w.Events:
