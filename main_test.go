@@ -67,12 +67,12 @@ func TestUsageCoversAllCommandsAndModes(t *testing.T) {
 	}
 
 	mustContain := []string{
-		"--backend",                  // per-command override flag documented
-		"backend b2",                 // switching to native B2 mode
-		"backuprepo ls --backend s3", // one-off override example
-		"-r",                         // recursive flag
-		"-f, -y",                     // rm confirmation skip
-		"S3-compatible",              // both modes described
+		"--backend",          // per-command override flag documented
+		"backend b2",         // switching to native B2 mode
+		"bb ls --backend s3", // one-off override example
+		"-r",                 // recursive flag
+		"-f, -y",             // rm confirmation skip
+		"S3-compatible",      // both modes described
 		"native Backblaze B2",
 		"EXAMPLES",
 		"SETUP",

@@ -110,6 +110,15 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   - **No-echo `appkey`**: `cli.readSecret` uses `golang.org/x/term.ReadPassword` when stdin is a terminal, else a line read (keeps piping + tests working). New module `golang.org/x/term`.
 - **Notes**: Windows event code verified by cross-compile (no Windows host to run on); existing `appkey` tests still pass via the fallback path. README, key_facts, ADR-016 updated; ADR-014's forceful-stop note marked superseded.
 
+### 2026-06-16 - User-facing text says `bb` (not `backuprepo`)
+- **Status**: Done (branch `docs/comments-and-readme`). gofmt/vet clean; `go test ./...` green; `GOOS=windows` build passes.
+- **Description**: Swept all `.go` files so user-facing output uses the binary name **`bb`** for consistency (users invoke `bb`, not `backuprepo`):
+  - `apperr` sentinel messages reprefixed `backuprepo:` → `bb:`; "(run `backuprepo init`)" → "(run `bb init`)".
+  - `main.go` usage/help text + the 8 `usage: backuprepo …` errors → `bb`.
+  - `cli` "not configured" message; daemon "use `bb watch`/`bb stop`" errors + command refs in comments; web console line; web UI HTML title/header.
+  - Updated `main_test.go` (asserts the usage example, now `bb ls --backend s3`).
+- **Notes**: Deliberately **left unchanged**: import paths / module path (`backuprepo` — renaming breaks the build), project-name doc comments, `~/backup_repo` state dir, and the internal Windows stop-event id. See the naming-convention note in `key_facts.md`. Surgical (no global `backuprepo`→`bb`).
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).

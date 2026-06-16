@@ -5,6 +5,7 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
 ### Repository
 
 - Module path: `backuprepo`
+- **Naming convention (2026-06-16):** all **user-facing** text — CLI usage/errors/prompts (`apperr` messages are prefixed `bb:`), and the web UI pages — says **`bb`** (the installed binary). The Go **module path, package names, project-name doc comments, and the state dir `~/backup_repo`** stay **`backuprepo`** (the project name). Don't "fix" the module name to `bb` — it would break every import. The internal Windows stop-event id (`Local\backuprepo-daemon-stop-<pid>`) is also intentionally left as-is (not user-visible).
 - Remote: `github.com:PT-Scandium/backuprepo.git` (default branch: `master`)
 - Language/toolchain: **Go 1.25+** (see `go.mod`), no CGO
 - License: MIT (PT-Scandium)

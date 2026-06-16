@@ -60,7 +60,7 @@ func (s *Server) Serve(ctx context.Context, out io.Writer) error {
 	srv := &http.Server{Addr: Addr, Handler: s.routes()}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	fmt.Fprintf(out, "Serving the backuprepo web UI at http://%s  (Ctrl-C or the Close button to stop)\n", Addr)
+	fmt.Fprintf(out, "Serving the bb web UI at http://%s  (Ctrl-C or the Close button to stop)\n", Addr)
 
 	select {
 	case err := <-errc:

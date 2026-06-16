@@ -65,7 +65,7 @@ func (d *Daemon) EnableDeletions(del b2.Deleter) {
 
 // Run watches every configured folder and blocks until the context is cancelled
 // or a stop signal (SIGINT/SIGTERM) arrives. dir is ~/backup_repo, used for the
-// PID file that `backuprepo stop` targets.
+// PID file that `bb stop` targets.
 //
 // Note: the watched-folder set is read once at startup. Running `watch`/`unwatch`
 // while the daemon is up does not take effect until it is restarted — the
@@ -93,7 +93,7 @@ func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
 		return err
 	}
 	if len(folders) == 0 {
-		return fmt.Errorf("%w: no folders are being watched (use `backuprepo watch`)", apperr.ErrDaemon)
+		return fmt.Errorf("%w: no folders are being watched (use `bb watch`)", apperr.ErrDaemon)
 	}
 
 	w, err := fsnotify.NewWatcher()
@@ -290,7 +290,7 @@ func pidPath(dir string) string { return filepath.Join(dir, "daemon.pid") }
 func writePID(dir string) error {
 	if data, err := os.ReadFile(pidPath(dir)); err == nil {
 		if pid, perr := strconv.Atoi(strings.TrimSpace(string(data))); perr == nil && processAlive(pid) {
-			return fmt.Errorf("%w: already running (pid %d); use `backuprepo stop`", apperr.ErrDaemon, pid)
+			return fmt.Errorf("%w: already running (pid %d); use `bb stop`", apperr.ErrDaemon, pid)
 		}
 		// Stale PID file (process gone); fall through and overwrite it.
 	}

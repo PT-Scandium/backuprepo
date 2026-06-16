@@ -114,7 +114,7 @@ func Status(ctx context.Context, st *store.Store, out io.Writer) error {
 		return err
 	}
 	if !configured {
-		fmt.Fprintln(out, "Status: not configured (run `backuprepo init`)")
+		fmt.Fprintln(out, "Status: not configured (run `bb init`)")
 		return nil
 	}
 	folders, err := st.ListFolders(ctx)
