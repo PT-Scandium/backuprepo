@@ -36,11 +36,11 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
 - **`s3`** (default) — S3-compatible Backblaze B2 endpoint via `aws-sdk-go-v2`; addresses bucket by **name**.
 - **`b2`** — Native Backblaze B2 **v3 API** (`/b2api/v3/...`) over stdlib `net/http`; addresses bucket by **ID** for list/upload, by **name** for download. The `b2_authorize_account` response nests `apiUrl`/`downloadUrl`/`recommendedPartSize` under `apiInfo.storageApi` (v3 shape). API version lives in `b2APIVersion` in `native.go`.
 - Stored in `backend TEXT` column of `config` table; `NULL`/empty defaults to `"s3"`.
-- Switch with `backuprepo backend [s3|b2]`; override per-command with `--backend s3|b2`.
+- Switch with `bb backend [s3|b2]`; override per-command with `--backend s3|b2`.
 
 ### Backblaze B2 configuration
 
-Collected by `backuprepo init`, stored in `backup.db`:
+Collected by `bb init`, stored in `backup.db`:
 - keyID (access key ID) — *secret-adjacent; stored encrypted, not here*
 - applicationKey — *secret; stored encrypted, not here*
 - Bucket **name** — used by S3 API and B2 native download (URL path `/file/<bucket-name>/<key>`)
