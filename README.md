@@ -66,6 +66,12 @@ Watching /home/me/Documents
 - **Using only the native B2 backend?** Leave **endpoint** and **region** blank; they're used by the S3 backend only. (Required: keyID, applicationKey, bucket name. The bucket ID is required for the `b2` backend.)
 - **Stay configured:** credentials persist encrypted on disk, so you never log in interactively again — each command silently re-authorizes with Backblaze using the saved key. You only re-run `init` if the key changes or is revoked.
 - **Switch buckets later:** to point `bb` at a *different* bucket without re-entering credentials, use `bb bucket <name> <id>` (or `bb bucket <name>` for an S3-only bucket). It changes only the bucket name + ID. Note: the stored key must have access to the new bucket — a bucket-scoped key won't, so for a bucket under a different key, re-run `init` instead.
+- **Rotate the application key:** `bb appkey` reads a new applicationKey from **stdin** (so the secret stays out of `argv` and shell history) and replaces the stored one. Pipe it from a secret store rather than typing it, and pass the new keyID to rotate the whole pair:
+  ```sh
+  pass show backblaze/b2-key | bb appkey 0005newkeyid   # rotate keyID + secret
+  bb appkey                                             # change only the secret (prompts on stdin)
+  ```
+  Don't pass the secret as a command-line argument (it would land in your shell history and process list). Verify afterwards with `bb ls`.
 
 ### 3. Pick a backend (optional)
 
@@ -176,6 +182,7 @@ The applicationKey is masked (last 4 characters); the keyID is just an identifie
 | `bb init` | Interactive setup (credentials, bucket name + ID, endpoint, region, optional first folder) |
 | `bb config` | Show current configuration (app key masked) |
 | `bb bucket [<name> [<id>]]` | Show, or switch to another bucket — changes only the bucket name + ID (keeps credentials/endpoint/region) |
+| `bb appkey [<new-keyID>]` | Replace the stored application key — reads the secret from **stdin** (kept out of shell history); pass a new keyID to rotate the whole pair |
 | `bb watch <dir>` | Add an existing directory to the watch list |
 | `bb unwatch <dir>` | Remove a directory from the watch list |
 | `bb list` | List watched folders and tracked files with last-backup times |

@@ -210,6 +210,35 @@ func (s *Store) SetBucket(ctx context.Context, name, id string) error {
 	return nil
 }
 
+// SetCredentials re-encrypts and stores a new applicationKey (secret), and the
+// keyID too when keyID is non-empty — both in a single statement so the keyID
+// and secret can't end up mismatched. Endpoint, region, bucket, and backend are
+// untouched. Requires existing config.
+func (s *Store) SetCredentials(ctx context.Context, keyID, appKey string) error {
+	appEnc, err := crypto.Seal(s.key, []byte(appKey))
+	if err != nil {
+		return err
+	}
+	query := `UPDATE config SET app_key_enc=? WHERE id=1`
+	args := []any{appEnc}
+	if keyID != "" {
+		keyEnc, kerr := crypto.Seal(s.key, []byte(keyID))
+		if kerr != nil {
+			return kerr
+		}
+		query = `UPDATE config SET key_id_enc=?, app_key_enc=? WHERE id=1`
+		args = []any{keyEnc, appEnc}
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("%w: set credentials: %v", apperr.ErrStore, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperr.ErrNotConfigured
+	}
+	return nil
+}
+
 // IsConfigured reports whether a config row exists.
 func (s *Store) IsConfigured(ctx context.Context) (bool, error) {
 	var n int

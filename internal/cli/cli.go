@@ -184,6 +184,34 @@ func Bucket(ctx context.Context, st *store.Store, name, id string, out io.Writer
 	return nil
 }
 
+// SetAppKey replaces the stored applicationKey (secret), read from in as a
+// single line so the secret never appears in argv or shell history. When
+// newKeyID is non-empty the stored keyID is updated too (B2 keys are
+// keyID+secret pairs). Endpoint, region, bucket, and backend are untouched.
+func SetAppKey(ctx context.Context, st *store.Store, newKeyID string, in io.Reader, out io.Writer) error {
+	ok, err := st.IsConfigured(ctx)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return apperr.ErrNotConfigured
+	}
+	fmt.Fprint(out, "New applicationKey (paste, or pipe via stdin): ")
+	line, _ := bufio.NewReader(in).ReadString('\n')
+	appKey := strings.TrimSpace(line)
+	if appKey == "" {
+		return fmt.Errorf("%w: empty applicationKey", apperr.ErrInvalidCredentials)
+	}
+	if err := st.SetCredentials(ctx, newKeyID, appKey); err != nil {
+		return err
+	}
+	if newKeyID != "" {
+		fmt.Fprintf(out, "Key ID set to %s\n", newKeyID)
+	}
+	fmt.Fprintf(out, "Application key updated (%s)\n", mask(appKey))
+	return nil
+}
+
 // Upload force-scans watched folders and uploads changed files. When
 // deleteRemoved is set, it also removes remote objects whose local files were
 // deleted (opt-in; destructive).
