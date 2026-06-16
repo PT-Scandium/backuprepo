@@ -245,7 +245,7 @@ A warm-themed localhost page for browsing your watched folders and their backup 
 Two buttons at the bottom: **Upload changed files** (runs a backup now) and **Close** (stops the server).
 
 **Security & scope:**
-- Binds to **`127.0.0.1` only**, with **no authentication** (you're already authenticated by the stored credentials). A `Host`-header check rejects non-localhost requests (DNS-rebinding guard).
+- Binds to **`127.0.0.1` only**, with **no authentication** (you're already authenticated by the stored credentials). A `Host`-header check rejects non-localhost requests (DNS-rebinding guard), and POST actions require a same-origin `Origin`/`Referer` (CSRF guard) so a malicious web page can't drive the UI.
 - Browsing and deletion are **confined to your watched folders** — the UI cannot reach arbitrary paths.
 - ⚠️ **The 🗑️ action is destructive and unrecoverable: it deletes the file (or folder) from *both* this computer and the backup bucket.** The page asks you to confirm first.
 

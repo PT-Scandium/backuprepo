@@ -14,7 +14,11 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 
 ## Entries
 
-### 2026-06-16 - Trailing CLI flags silently ignored
+### 2026-06-16 - Web UI CSRF on POST endpoints
+- **Issue**: The web UI's state-changing POST endpoints (`/upload`, `/delete`, `/close`) had no CSRF defense. A malicious web page the user visited could auto-submit a cross-site form to `http://127.0.0.1:9171/...` and drive the UI — including the **destructive local+remote delete** and stopping the server. Flagged HIGH by automated security review on the `feat/web-ui` merge.
+- **Root Cause**: The server relied on the `Host`-header guard, which stops DNS-rebinding but NOT a cross-site form POST — the browser sends those with the real `Host: 127.0.0.1:9171`. With no auth, the server trusted every localhost request. ADR-015 had even (wrongly) claimed the Host guard mitigated CSRF.
+- **Solution**: Added `sameOrigin(r)` in `requirePost`: each POST must carry an `Origin` (or `Referer` fallback) whose host equals the server's, failing closed when absent. The UI's own forms send a matching Origin; an attacker page sends its own and is rejected. Test `TestCSRFRejectsCrossOriginPost`; ADR-015 corrected.
+- **Prevention**: For any no-auth localhost server, a Host/DNS-rebinding guard is necessary but **not sufficient** — add an Origin/Referer (or token) CSRF check to every state-changing endpoint. Don't conflate the two defenses.
 - **Issue**: For `ls`/`get`/`put`/`rm`/`find`, a flag placed after the path (e.g. `rm brtest/ -f`, `ls photos/ -r`) was silently dropped — `rm` would prompt and abort, `ls -r` wasn't recursive, `--backend` overrides were ignored.
 - **Root Cause**: Each command called `fs.Parse(rest)` once; Go's `flag` parser stops at the first non-flag token, leaving any later flags as unparsed positionals.
 - **Solution**: Added `parseFlags` (main.go) that resumes `fs.Parse` after each positional and returns the collected positionals; all five commands use it. Regression test `TestParseFlagsAnyOrder`.

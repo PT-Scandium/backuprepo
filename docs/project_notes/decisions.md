@@ -246,6 +246,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 **Decision:**
 - New `internal/web` package over **stdlib `net/http` + `html/template`** (no new dependency). `bb serve` runs it in the foreground; `bb start` stays daemon-only (the spec pairs them, but keeping `serve` standalone avoids changing freshly-shipped `start` behavior — user choice, 2026-06-16).
 - **Bind `127.0.0.1` only** and reject any request whose `Host` header isn't `localhost`/`127.0.0.1` (DNS-rebinding guard) — the spec's "no auth" is acceptable only because the surface is local.
+- **CSRF defense on POST endpoints** (added 2026-06-16 after a security review): the Host guard does NOT stop a cross-site form POST (the browser sends those with the real Host), and with no auth the server trusts any localhost request — so `sameOrigin` requires each POST's `Origin` (or `Referer` fallback) host to equal the server's, failing closed when absent. Browser forms send a matching Origin; an attacker page sends its own and is rejected.
 - **Confine browsing and deletion to watched folders** (lexical `filepath.Rel` check, same idea as `get -r`'s `underBase`). A no-auth local server must never list or delete arbitrary paths (`/etc`, `$HOME`).
 - The table reads the **local filesystem** (name/type/size/mtime/owner) joined with **backup state** from the store (`Last Backup`). OS owner via build-tagged `owner_unix.go` (uid → `user.LookupId`) / `owner_windows.go` (stub `—`).
 - **Delete = local file AND remote object**, unrecoverable (user choice, 2026-06-16). Guarded by a JS `confirm()`; for a directory it purges the remote object of every tracked file beneath it, then removes the local tree. Remote delete happens before local so a failure leaves the file intact.
@@ -260,4 +261,5 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ Feature-complete vs the spec; no new dependency; localhost-only, path-confined, Host-guarded.
 - ✅ Handlers unit-tested via `httptest` (listing, traversal 403, Host-guard 403, upload, local+remote delete); live-verified end to end.
 - ❌ Delete is irreversible by design — the confirm dialog is the only safety net (no trash/undo).
-- ❌ No auth at all — safe only on a trusted local machine; anyone with localhost access (or local code) can use it. CSRF is mitigated only by the Host guard + localhost binding.
+- ❌ No auth at all — safe only on a trusted local machine; anyone with localhost access (or local code running there) can use it.
+- CSRF is defended by the `Origin`/`Referer` same-origin check on POSTs (the Host guard alone does NOT cover CSRF — that was an initial gap caught by automated review; see bugs.md 2026-06-16).
