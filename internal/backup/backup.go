@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -24,17 +25,28 @@ import (
 type Service struct {
 	store *store.Store
 	up    b2.Uploader
+	del   b2.Deleter // optional; nil disables deletion propagation (the default)
 }
 
-// New constructs a Service from a store and an uploader.
+// New constructs a Service from a store and an uploader. Deletion propagation is
+// off by default — see WithDeleter.
 func New(st *store.Store, up b2.Uploader) *Service {
 	return &Service{store: st, up: up}
+}
+
+// WithDeleter enables deletion propagation: after uploading, UploadChanged will
+// remove remote objects (and local records) for tracked files that no longer
+// exist on disk. Opt-in because it is destructive. Returns s for chaining.
+func (s *Service) WithDeleter(del b2.Deleter) *Service {
+	s.del = del
+	return s
 }
 
 // Result summarizes an UploadChanged run.
 type Result struct {
 	Uploaded int
 	Skipped  int
+	Deleted  int
 	Failed   int
 	Errors   []error
 }
@@ -65,10 +77,77 @@ func (s *Service) UploadChanged(ctx context.Context) (Result, error) {
 	if err != nil {
 		return res, err
 	}
+	if s.del != nil {
+		if err := s.propagateDeletions(ctx, &res); err != nil {
+			return res, err
+		}
+	}
 	if res.Failed > 0 {
 		return res, fmt.Errorf("%w: %d file(s) failed", apperr.ErrUploadFailed, res.Failed)
 	}
 	return res, nil
+}
+
+// propagateDeletions removes remote objects (and their local records) for tracked
+// files that no longer exist on disk but still live under a watched folder. It is
+// only invoked when a deleter is configured (WithDeleter).
+func (s *Service) propagateDeletions(ctx context.Context, res *Result) error {
+	folders, err := s.store.ListFolders(ctx)
+	if err != nil {
+		return err
+	}
+	// Only consider folders that currently exist as directories. If a watched
+	// folder is missing (e.g. an unmounted drive), skip deletions under it rather
+	// than purging every backup it ever held — a transient mount failure must not
+	// be mistaken for "the user deleted everything."
+	var live []string
+	for _, f := range folders {
+		if info, statErr := os.Stat(f); statErr == nil && info.IsDir() {
+			live = append(live, f)
+		}
+	}
+	if len(live) == 0 {
+		return nil
+	}
+	files, err := s.store.ListFiles(ctx)
+	if err != nil {
+		return err
+	}
+	for _, fr := range files {
+		if fr.RemoteKey == "" || !underAny(live, fr.Path) {
+			continue
+		}
+		if _, statErr := os.Lstat(fr.Path); statErr == nil {
+			continue // still present locally
+		} else if !os.IsNotExist(statErr) {
+			continue // uncertain (permission, I/O error) — never delete on doubt
+		}
+		// The file is gone. Delete the remote object first; treat already-absent
+		// as success so a retried run still clears the local record.
+		if err := s.del.Delete(ctx, fr.RemoteKey); err != nil && !errors.Is(err, apperr.ErrObjectNotFound) {
+			res.Failed++
+			res.Errors = append(res.Errors, fmt.Errorf("%w: delete remote for %s: %v", apperr.ErrDeleteFailed, fr.Path, err))
+			continue
+		}
+		if err := s.store.RemoveFile(ctx, fr.Path); err != nil {
+			res.Failed++
+			res.Errors = append(res.Errors, err)
+			continue
+		}
+		res.Deleted++
+	}
+	return nil
+}
+
+// underAny reports whether path lies within any of the given folders.
+func underAny(folders []string, path string) bool {
+	for _, f := range folders {
+		if rel, err := filepath.Rel(f, path); err == nil &&
+			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // PendingCount returns how many files would be uploaded by UploadChanged.

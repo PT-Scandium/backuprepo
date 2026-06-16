@@ -58,6 +58,12 @@ func New(st *store.Store, up b2.Uploader) *Daemon {
 	}
 }
 
+// EnableDeletions turns on deletion propagation: the daemon will remove remote
+// objects whose local files have been deleted (opt-in; destructive).
+func (d *Daemon) EnableDeletions(del b2.Deleter) {
+	d.svc = d.svc.WithDeleter(del)
+}
+
 // Run watches every configured folder and blocks until the context is cancelled
 // or a stop signal (SIGINT/SIGTERM) arrives. dir is ~/backup_repo, used for the
 // PID file that `backuprepo stop` targets.
@@ -219,8 +225,9 @@ func (d *Daemon) flush(ctx context.Context, out io.Writer) {
 			res.Uploaded, res.Skipped, res.Failed, err)
 		return
 	}
-	if res.Uploaded > 0 {
-		fmt.Fprintf(out, "scan: uploaded %d, skipped %d\n", res.Uploaded, res.Skipped)
+	if res.Uploaded > 0 || res.Deleted > 0 {
+		fmt.Fprintf(out, "scan: uploaded %d, skipped %d, deleted %d\n",
+			res.Uploaded, res.Skipped, res.Deleted)
 	}
 }
 

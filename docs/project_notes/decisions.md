@@ -192,3 +192,27 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ Reuses `UploadChanged`; the daemon is ~one package of glue, not a second change-detection engine.
 - ❌ First third-party *runtime* dependency added since the aws-sdk/sqlite baseline — a small supply-chain surface increase.
 - ❌ inotify is not recursive: subdirectories are watched individually and new dirs re-watched at runtime (`daemon.addRecursive` + the Create handler). Windows `ReadDirectoryChangesW` is natively recursive, so platform parity needs build-tagged code later (tracked in `issues.md`).
+
+### ADR-013: Deletion propagation is opt-in, scoped to present watched folders, via an optional Deleter (2026-06-16)
+
+**Context:**
+- `UploadChanged` was upload-only: a locally deleted file kept its remote object and DB record forever. Roadmap/`issues.md` flagged deletion propagation.
+- ADR-006/008 deliberately kept `backup.Service` depending only on the narrow `b2.Uploader` (no `Delete`).
+
+**Decision:**
+- Deletion propagation is **opt-in, never default** — `bb upload --delete` and `bb start --delete`. The default keeps retaining backups when local files vanish (the backup-appropriate conservative default; mirrors rsync requiring an explicit `--delete`).
+- Add a narrow `b2.Deleter` interface (`Delete` only); `Backend`/`FakeBackend` already satisfy it. `backup.Service` keeps its `b2.Uploader` dependency and gains an **optional** `del b2.Deleter` (nil = off), set via `WithDeleter`. This preserves ADR-008 segregation: backup needs `Delete` only when deletion is enabled.
+- Detection (after the upload walk): for each tracked file whose path is under a **currently-existing** watched folder and is now absent on disk (`os.IsNotExist`), delete the remote object by `remote_key`, then remove the local record. Uncertain stat errors (permission/I/O) never trigger deletion. An already-absent remote (`ErrObjectNotFound`) counts as success so retries still clear the record.
+- **Safety guard:** skip deletions under any watched folder not currently present as a directory — an unmounted drive must not be read as "the user deleted everything." Covered by `TestDeletionPropagationSkipsMissingFolder`.
+
+**Alternatives Considered:**
+- Default-on deletion → Rejected: destroys a backup's core value (recovering deleted files); a footgun.
+- Widen `backup.Service` to the full `b2.Backend` → Rejected: breaks ADR-008 segregation; the optional `Deleter` is the minimal extension.
+- Drive deletes from fsnotify `Remove` events in the daemon → Rejected for now: scan-based reconciliation is one source of truth for both `upload` and the daemon; an event path could drift, and the fallback scan already converges.
+
+**Consequences:**
+- ✅ Safe default preserved; no surprise data loss. Interface segregation intact (optional `Deleter`).
+- ✅ Unmounted-drive guard prevents catastrophic mass-deletion; identical behavior for `upload --delete` and `start --delete` (both via `UploadChanged`).
+- ❌ Reconciliation is O(tracked files) `Lstat` calls per run — fine at current scale, optimizable later.
+- ❌ On a versioned bucket, a propagated delete purges ALL versions (existing backend `Delete` semantics) — irreversible remotely.
+- ❌ `unwatch` leaves records that are no longer under a watched folder, so they are never deletion candidates — those remote objects persist (intended: unwatch ≠ delete).

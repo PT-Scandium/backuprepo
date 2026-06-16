@@ -32,6 +32,12 @@ type Uploader interface {
 	Exists(ctx context.Context, key string) (bool, error)
 }
 
+// Deleter removes a single object. Backend satisfies it; the backup flow uses it
+// only when deletion propagation is explicitly enabled (opt-in, destructive).
+type Deleter interface {
+	Delete(ctx context.Context, key string) error
+}
+
 // Backend is the full bucket interface used by the manual file commands.
 type Backend interface {
 	Uploader

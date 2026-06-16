@@ -14,8 +14,14 @@ import (
 
 // Start runs the file-watching daemon in the foreground until stopped. dir is
 // ~/backup_repo (for the PID file). It blocks until Ctrl-C or `backuprepo stop`.
-func Start(ctx context.Context, st *store.Store, up b2.Uploader, dir string, out io.Writer) error {
-	return daemon.New(st, up).Run(ctx, dir, out)
+// When deleteRemoved is set, the daemon also removes remote objects whose local
+// files were deleted (opt-in; destructive).
+func Start(ctx context.Context, st *store.Store, be b2.Backend, deleteRemoved bool, dir string, out io.Writer) error {
+	d := daemon.New(st, be)
+	if deleteRemoved {
+		d.EnableDeletions(be)
+	}
+	return d.Run(ctx, dir, out)
 }
 
 // Stop signals a running daemon to shut down gracefully.

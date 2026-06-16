@@ -55,11 +55,20 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   - Added dependency `github.com/fsnotify/fsnotify v1.10.1` (see ADR-012).
 - **Notes**: Linux-focused — `syscall.SIGTERM` and non-recursive inotify handling assume Unix; Windows (`ReadDirectoryChangesW`, natively recursive) needs build-tagged variants. Binary still ~14 MB. Still pending: web UI / `serve` (port 9171); deletion propagation (daemon is upload-only); commit/merge; README still says the daemon is not built.
 
+### 2026-06-16 - Deletion propagation (opt-in)
+- **Status**: Implemented on working tree (uncommitted). `go test ./...` green incl. `-race`; vet/gofmt clean.
+- **Description**: Made `UploadChanged` able to remove remote objects whose local files were deleted, **opt-in** via `--delete` on `upload` and `start` (see ADR-013):
+  - New `b2.Deleter` interface (`Delete` only); `backup.Service` keeps its narrow `b2.Uploader` dep and gains an optional deleter via `WithDeleter` (nil = off, the default).
+  - `backup.propagateDeletions` runs after the upload walk: deletes remote + local record for tracked files now absent under a **currently-present** watched folder. Unmounted-folder safety guard (skip if the folder is missing); uncertain stat errors never delete; `ErrObjectNotFound` treated as success.
+  - `store.RemoveFile`; `Result.Deleted`; `cli.Upload`/`cli.Start` widened to `b2.Backend` + `deleteRemoved`; `daemon.EnableDeletions` + flush reports deletions; `main.go` `--delete` FlagSets for `upload`/`start`; usage updated.
+  - Tests: disabled-by-default, removes-remote+record (keeps others), skips-missing-folder.
+- **Notes**: Opt-in only — default still retains backups. Versioned-bucket deletes purge all versions (irreversible). Daemon deletion uses scan reconciliation, not fsnotify `Remove` events. `unwatch`ed folders' objects persist by design.
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).
 - ~~**Daemon watcher + `start`/`stop`**~~ — BUILT 2026-06-16 (working tree; see work log + ADR-012): fsnotify recursive watch + 5-min fallback scan + 1s/5s debounce, graceful shutdown.
 - **Web UI / `serve` (port 9171)** — still not built. Localhost interface: folder table, last-backup times, delete actions, force-upload button (designed in `CLAUDE.md`).
 - **Windows event backend** — `ReadDirectoryChangesW` (build-tagged) to replace the Linux-only `syscall.SIGTERM` / non-recursive inotify handling in `internal/daemon`.
-- **Deletion propagation** — daemon/`upload` is upload-only; a local delete does not remove the remote object. Decide whether/how to mirror deletions.
+- ~~**Deletion propagation**~~ — DONE 2026-06-16 (working tree; see work log + ADR-013): opt-in `--delete` on `upload`/`start`, with an unmounted-folder safety guard.
 - **Minor follow-ups from final review** — `b2.Uploader.Exists` and the `size` param are unused forward-looking hooks; a couple of cosmetic nits (`copyInto` wrapper, `usage(*os.File)` vs `io.Writer`).
