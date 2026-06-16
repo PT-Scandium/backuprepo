@@ -1,75 +1,56 @@
-# backuprepo
+# backuprepo (`bb`)
 
-A cross-platform CLI that watches user-specified folders and uploads changed files to a Backblaze B2 bucket via the S3-compatible API. Credentials are stored encrypted in a local SQLite database. Distributed as a single static binary.
+A cross-platform CLI that backs up your files to a Backblaze B2 bucket — either by **watching local folders** and uploading changed files, or by **manually pushing/pulling** individual files and folders. Credentials are stored encrypted in a local SQLite database, and it ships as a single static binary named **`bb`**.
 
-> **Status:** Core CLI is complete. Background daemon, web UI, and `serve`/`start`/`stop` commands are planned follow-ups — see the roadmap section below.
-
----
-
-## Build & install
-
-Requires Go 1.25+. No CGO — uses pure-Go SQLite (`modernc.org/sqlite`), so the result is a single **statically linked** binary that runs on any Linux host with no shared-library dependencies.
-
-### Option A — Makefile (recommended)
-
-The Makefile builds a short-named binary, **`bb`** (for Backblaze):
-
-```sh
-make            # build ./bb in the repo
-make install    # build and copy bb to ~/.local/bin (must be on your PATH)
-```
-
-Install system-wide instead with `sudo make install PREFIX=/usr/local/bin`. Other targets: `make clean`, `make uninstall`, `make test`, `make help`.
-
-### Option B — plain go build
-
-```sh
-go build -ldflags="-s -w" -o backuprepo .
-```
-
-The stripped binary is approximately **14 MB** (aws-sdk-go-v2 + modernc.org/sqlite account for most of the size; this is **above** the <10 MB original target and is noted for future trimming).
-
-> **Binary name:** the examples below call `./backuprepo`. If you installed with `make install`, the command is just **`bb`** and works from any directory — `bb` and `./backuprepo` are the same program, so `bb init`, `bb upload`, etc. are equivalent.
+> **Status:** the core CLI is complete. The background daemon and web UI (`serve`/`start`/`stop`, port 9171) are planned — see [Roadmap](#roadmap-not-yet-implemented).
 
 ---
 
-## Quick start
+## Install
+
+Requires **Go 1.25+**. No CGO (pure-Go SQLite), so the build is a single **statically linked** binary that runs on any Linux host with no shared-library dependencies.
 
 ```sh
-# 1. Configure credentials and bucket
-./backuprepo init
-
-# 2. Add a folder to back up
-./backuprepo watch /path/to/folder
-
-# 3. Upload all changed files now
-./backuprepo upload
+make install        # build and copy `bb` to ~/.local/bin
 ```
 
-After `upload`, run it again: files that have not changed are skipped automatically (`Uploaded: 0, Skipped: N`).
+Make sure `~/.local/bin` is on your `PATH`. Other options:
+
+```sh
+make                # just build ./bb in the repo (then run it as ./bb)
+sudo make install PREFIX=/usr/local/bin    # install system-wide
+make clean | uninstall | test | help       # housekeeping targets
+```
+
+No `make`? `go build -ldflags="-s -w" -o bb .` produces the same binary. The stripped binary is ~14 MB.
+
+> This guide uses the command **`bb`** (the installed name). If you only ran `make`, call it as `./bb` from the repo directory.
 
 ---
 
-## Usage walkthrough
+## User guide
 
-This section walks through a complete first-time setup and a typical backup session. Replace the example paths and credentials with your own.
+There are two ways to use `bb`, sharing one setup:
 
-### 0. Get your Backblaze B2 credentials
+- **Folder backup** *(mode 1)* — watch folders; `upload` sends whatever changed.
+- **Manual file operations** *(mode 2)* — `put`/`get`/`ls`/`rm`/`find` act directly on the bucket.
+
+Follow steps 1–3 once, then use mode 1, mode 2, or both.
+
+### 1. Get your Backblaze B2 credentials
 
 In the [Backblaze B2 console](https://secure.backblaze.com/b2_buckets.htm):
 
-1. **Create a bucket** (or pick an existing one). Note both its **name** (e.g. `my-backups`) and its **bucket ID** (the alphanumeric ID shown in the bucket list). `init` asks for both — the bucket name is used by the S3-compatible API and for downloads; the bucket ID is used by the native B2 API for listing and uploads.
-2. Go to **Application Keys** → **Add a New Application Key**. Give it read/write access to your bucket. Backblaze shows you a **keyID** and an **applicationKey** — copy both now, because the applicationKey is shown only once.
-3. On the **Buckets** page, find your bucket's **Endpoint**, e.g. `s3.us-west-004.backblazeb2.com`. Your **region** is the middle segment of that hostname — `us-west-004`.
+1. **Pick or create a bucket.** Note its **name** (e.g. `my-backups`) and its **bucket ID** (alphanumeric, shown in the bucket list).
+2. **Application Keys → Add a New Application Key**, with read/write on that bucket. Backblaze shows a **keyID** and an **applicationKey** — copy both now; the applicationKey is shown only once. *(A bucket-scoped key is safer than your account master key.)*
+3. *(S3 backend only)* On the **Buckets** page note the **Endpoint** (e.g. `s3.us-west-004.backblazeb2.com`); the **region** is its middle segment (`us-west-004`).
 
-You now have the six values `init` will ask for: keyID, applicationKey, bucket name, bucket ID, S3 endpoint URL, and region.
+### 2. Configure — `bb init`
 
-### 1. First-time setup — `init`
-
-`init` prompts for each value and saves them (credentials encrypted) to `~/backup_repo/backup.db`. It can also add your first folder at the end.
+`init` prompts for each value and saves them (credentials encrypted) to `~/backup_repo/backup.db`:
 
 ```text
-$ ./backuprepo init
+$ bb init
 Backblaze keyID (access key ID): 0001abcdef0123456789
 Backblaze applicationKey (secret): K001-XXXXXXXXXXXXXXXXXXXXXXXXXXX
 Bucket name: my-backups
@@ -81,77 +62,78 @@ Folder to watch (blank to skip): /home/me/Documents
 Watching /home/me/Documents
 ```
 
-The applicationKey is the only value you must keep secret. To reconfigure later, run `init` again — it overwrites the saved configuration.
+- Only the **applicationKey** is secret. Re-run `init` anytime to reconfigure — it overwrites the saved config.
+- **Using only the native B2 backend?** Leave **endpoint** and **region** blank; they're used by the S3 backend only. (Required: keyID, applicationKey, bucket name. The bucket ID is required for the `b2` backend.)
+- **Stay configured:** credentials persist encrypted on disk, so you never log in interactively again — each command silently re-authorizes with Backblaze using the saved key. You only re-run `init` if the key changes or is revoked.
 
-### 2. Choose what to back up — `watch` / `unwatch`
+### 3. Pick a backend (optional)
 
-A "watched" folder is backed up recursively (all files under it, at any depth). Add or remove folders at any time:
+`bb` can reach B2 two ways; the default is `s3`:
 
-```text
-$ ./backuprepo watch /home/me/Pictures
-Watching /home/me/Pictures
+| Backend | `id` | Protocol |
+|---------|------|----------|
+| **S3-compatible** (default) | `s3` | aws-sdk-go-v2 against the B2 S3 endpoint |
+| **Native B2** | `b2` | Backblaze B2 **v3** API over stdlib `net/http` |
 
-$ ./backuprepo unwatch /home/me/Documents
-Stopped watching /home/me/Documents
+```sh
+bb backend b2        # set the stored backend (persists)
+bb backend           # show the current backend
+bb ls --backend s3   # override for one command only
 ```
 
-`watch` requires the directory to already exist; it errors otherwise. The path you pass is the path that's stored, so prefer absolute paths.
+### 4a. Folder backup (mode 1)
 
-### 3. Check what will happen — `status` and `list`
+Watch folders, then `upload` whatever changed. A watched folder is backed up recursively (all files beneath it).
 
-`status` is a quick summary (and the default when you run `backuprepo` with no arguments):
-
-```text
-$ ./backuprepo status
-Status: configured
-Backend: s3
-Watched folders: 1
-Pending uploads: 12
+```sh
+bb watch /home/me/Pictures      # add a folder (must already exist)
+bb unwatch /home/me/Documents   # stop watching
+bb list                         # watched folders + tracked files & last-backup times
+bb status                       # quick summary (also what `bb` with no command prints)
+bb upload                       # upload changed files; no-op if nothing changed
 ```
 
-`list` shows every watched folder plus each tracked file and when it was last backed up (`never` until its first successful upload):
+`upload` uploads only what changed and prints a summary:
 
 ```text
-$ ./backuprepo list
-Watched folders:
-  /home/me/Pictures
-
-Tracked files:
-PATH                          SIZE     LAST BACKUP
-/home/me/Pictures/cat.jpg     248913   2026-06-06T19:55:01+07:00
-/home/me/Pictures/dog.png     512004   never
-```
-
-### 4. Back up — `upload`
-
-`upload` scans every watched folder and uploads only the files that changed since their last backup. It prints a summary:
-
-```text
-$ ./backuprepo upload
+$ bb upload
 Uploaded: 12, Skipped: 0, Failed: 0
-```
-
-Run it again and unchanged files are skipped — nothing is re-sent:
-
-```text
-$ ./backuprepo upload
+$ bb upload            # second run, nothing changed
 Uploaded: 0, Skipped: 12, Failed: 0
 ```
 
-If individual files fail (e.g. a permission error or a network blip), `upload` reports them in `Failed`, keeps going with the rest, and exits with a non-zero status so scripts can detect the problem.
+Failed files are counted, don't abort the run, and make `bb` exit non-zero so scripts can detect a problem.
 
-> **Tip:** because `upload` is a safe no-op when nothing changed, you can run it from `cron` or a systemd timer to get periodic backups until the background daemon (see Roadmap) is implemented. For example, every 15 minutes:
+> **Scheduled backups:** because `upload` is a safe no-op when nothing changed, run it from cron until the background daemon lands:
 >
 > ```cron
-> */15 * * * * /path/to/backuprepo upload >> ~/backup_repo/upload.log 2>&1
+> */15 * * * * /home/me/.local/bin/bb upload >> ~/backup_repo/upload.log 2>&1
 > ```
 
-### 5. Inspect configuration — `config`
+### 4b. Manual file operations (mode 2)
 
-`config` prints the current settings. The applicationKey is masked (only its last 4 characters are shown); the keyID is an access-key identifier and is shown in full.
+Act directly on the bucket — no watching required.
+
+```sh
+bb ls                                    # list bucket root (folders shown as name/)
+bb ls photos/ -r                         # list everything under a prefix, recursively
+bb put ./report.pdf reports/report.pdf   # upload a file to a specific key
+bb put ./photos/ photos/ -r              # upload a whole directory
+bb get reports/report.pdf ./out.pdf      # download an object
+bb get photos/ ./local-photos/ -r        # download a whole prefix
+bb find report                           # case-insensitive search of object names
+bb rm reports/report.pdf                 # delete one object (asks to confirm)
+bb rm photos/ -r -f                      # delete a whole prefix, skip confirmation
+```
+
+- For `get`/`put`, the second path defaults to the basename if you omit it.
+- `rm` deletes **all versions** on the `b2` backend and **confirms** unless you pass `-f` or `-y`.
+- **Flags go anywhere:** `-r`, `-f`, `-y`, and `--backend` may appear before, after, or between the path arguments — `bb rm photos/ -r -f` and `bb rm -r -f photos/` are equivalent.
+
+### 5. Check your configuration — `bb config`
 
 ```text
-$ ./backuprepo config
+$ bb config
 Endpoint:    https://s3.us-west-004.backblazeb2.com
 Region:      us-west-004
 Bucket:      my-backups
@@ -163,180 +145,61 @@ Watched folders: 1
   /home/me/Pictures
 ```
 
+The applicationKey is masked (last 4 characters); the keyID is just an identifier and is shown in full.
+
 ---
 
-## Subcommands
+## Command reference
 
 | Command | Description |
 |---------|-------------|
-| `backuprepo` (no args) | Alias for `status` |
-| `backuprepo init` | Interactive setup — prompts for B2 credentials, bucket name, S3 endpoint, region, and an optional first folder to watch |
-| `backuprepo watch <dir>` | Add an existing directory to the watch list |
-| `backuprepo unwatch <dir>` | Remove a directory from the watch list |
-| `backuprepo list` | List watched folders and all tracked files with last-backup timestamps |
-| `backuprepo status` | Show whether configured, how many folders are watched, and how many files are pending upload |
-| `backuprepo upload` | Scan watched folders and upload every file that has changed since the last backup; no-op if nothing has changed |
-| `backuprepo config` | Show current configuration (endpoint, region, bucket, bucket ID, backend, key ID, and masked app key) |
-| `backuprepo ls [path] [-r]` | List bucket contents; folders shown with trailing `/` |
-| `backuprepo get <remote> [local] [-r]` | Download an object or (with `-r`) all objects under a prefix |
-| `backuprepo put <local> [remote] [-r]` | Upload a file or (with `-r`) a directory |
-| `backuprepo rm <path> [-r] [-f]` | Delete an object or folder prefix; confirms unless `-f` or `-y` |
-| `backuprepo find <query> [prefix]` | Case-insensitive substring search of object keys |
-| `backuprepo backend [s3\|b2]` | Show or set the stored storage backend |
-| `backuprepo help` | Print usage |
+| `bb` (no args) | Same as `status` |
+| `bb init` | Interactive setup (credentials, bucket name + ID, endpoint, region, optional first folder) |
+| `bb config` | Show current configuration (app key masked) |
+| `bb watch <dir>` | Add an existing directory to the watch list |
+| `bb unwatch <dir>` | Remove a directory from the watch list |
+| `bb list` | List watched folders and tracked files with last-backup times |
+| `bb status` | Configured? backend, watched-folder count, pending uploads |
+| `bb upload` | Upload every changed file in watched folders; no-op if nothing changed |
+| `bb backend [s3\|b2]` | Show or set the stored backend |
+| `bb ls [path] [-r]` | List bucket contents (folders shown with trailing `/`) |
+| `bb get <remote> [local] [-r]` | Download an object, or a prefix with `-r` |
+| `bb put <local> [remote] [-r]` | Upload a file, or a directory with `-r` |
+| `bb rm <path> [-r] [-f]` | Delete an object/prefix; confirms unless `-f`/`-y` |
+| `bb find <query> [prefix]` | Case-insensitive substring search of object names |
+| `bb help` | Print usage |
 
-Exit codes: `0` on success, `1` on error (message written to stderr).
-
----
-
-## Storage backends
-
-backuprepo supports two storage backends, selectable at any time:
-
-| Backend | Identifier | Protocol |
-|---------|-----------|---------|
-| **S3-compatible** (default) | `s3` | aws-sdk-go-v2, S3-compatible Backblaze endpoint |
-| **Native B2** | `b2` | Backblaze B2 v3 API over stdlib `net/http` |
-
-The stored backend is used by `upload` and all manual file commands. Switch it permanently with:
-
-```sh
-backuprepo backend b2      # switch to native B2
-backuprepo backend s3      # switch back to S3-compatible
-backuprepo backend         # show current stored backend
-```
-
-Override per-command without changing the stored setting with `--backend`:
-
-```sh
-backuprepo ls photos/ --backend b2
-backuprepo get photos/cat.jpg --backend s3
-```
-
-The default is `s3`, which preserves the original behavior.
+Every file command also accepts `--backend s3|b2` to override the stored backend for that one invocation. Exit codes: `0` success, `1` error (message on stderr).
 
 ---
 
-## Manual bucket commands
+## How it works
 
-These commands let you interact directly with the B2 bucket. They work against whichever backend is active (stored or `--backend` override).
-
-| Command | Description |
-|---------|-------------|
-| `backuprepo ls [path] [-r]` | List bucket contents. Folders shown with trailing `/`. `-r` lists recursively. |
-| `backuprepo get <remote> [local] [-r]` | Download an object to a local path (default: basename). `-r` downloads all objects under a prefix. |
-| `backuprepo put <local> [remote] [-r]` | Upload a local file to a remote key (default: basename). `-r` uploads an entire directory. |
-| `backuprepo rm <path> [-r] [-f]` | Delete an object (or with `-r`, all objects under a prefix). Confirms unless `-f` or `-y`. |
-| `backuprepo find <query> [prefix]` | Case-insensitive substring search of object keys, optionally scoped to a prefix. |
-| `backuprepo backend [s3\|b2]` | Show or set the stored backend. |
-
-Each command also accepts `--backend s3|b2` to override the stored backend for that invocation only.
-
-> **Flag position:** flags (`-r`, `-f`, `-y`, `--backend`) may appear before, after, or between the path arguments — `rm brtest/ -r -f` and `rm -r -f brtest/` are equivalent.
-
-### Example session
-
-```sh
-# List top-level contents
-backuprepo ls
-
-# List all objects under photos/ (recursive)
-backuprepo ls photos/ -r
-
-# Download a single file
-backuprepo get photos/cat.jpg ./cat.jpg
-
-# Download an entire prefix
-backuprepo get photos/ ./local-photos/ -r
-
-# Upload a single file to a specific key
-backuprepo put ./report.pdf reports/2026/report.pdf
-
-# Upload a whole directory
-backuprepo put ./local-photos/ photos/ -r
-
-# Delete with confirmation prompt
-backuprepo rm old-file.txt
-
-# Delete a prefix without confirmation
-backuprepo rm old-photos/ -r -f
-
-# Search for all objects containing "cat"
-backuprepo find cat
-
-# Search for "cat" only under the photos/ prefix
-backuprepo find cat photos/
-
-# Use native B2 backend for one command
-backuprepo ls --backend b2
-```
-
----
-
-## B2 configuration — bucket name and bucket ID
-
-Backblaze B2 has two identifiers for every bucket: a human-readable **name** (e.g. `my-backups`) and a numeric **ID** (e.g. `abc123456789`). Starting with the dual-backend release, `backuprepo init` asks for **both**:
-
-- **Bucket name** — used by the S3-compatible API and by the native B2 API for downloads (URL path `/file/<bucket-name>/<key>`).
-- **Bucket ID** — used by the native B2 API for listing and uploads (`b2_list_file_names`, `b2_get_upload_url`).
-
-Both identifiers are available in the Backblaze B2 console under **Buckets**. If you only intend to use the S3-compatible backend you may leave the bucket ID blank, but it is required for `--backend b2`.
-
-`init` now prompts for:
-
-| Prompt | Example value |
-|--------|---------------|
-| Backblaze keyID (access key ID) | `0001abcdef0123456789` |
-| Backblaze applicationKey (secret) | `K001-...` |
-| Bucket name | `my-backups` |
-| Bucket ID (for native B2 API) | `e73ede9969c64827` |
-| S3 endpoint URL | `https://s3.us-west-004.backblazeb2.com` |
-| S3 region | `us-west-004` |
-
-Find your endpoint and region in the Backblaze B2 console under Buckets → Endpoint. The region is the subdomain segment between `s3.` and `.backblazeb2.com`.
-
----
-
-## Local state layout
-
-All state lives under `~/backup_repo/`:
+**Local state** lives under `~/backup_repo/`:
 
 ```
 ~/backup_repo/
-  backup.db   SQLite database — credentials (AES-256-GCM encrypted at rest),
-              watched folders, and per-file backup metadata
-  key         32-byte random master key (mode 0600); created on first run
-              and reused on every subsequent launch
+  backup.db   SQLite — credentials (AES-256-GCM encrypted at rest), watched
+              folders, and per-file backup metadata
+  key         32-byte random master key (mode 0600), created on first run
 ```
 
-The `key` file is the only secret that lives in plaintext on disk; protect it like a password. Credential fields inside `backup.db` are encrypted with this key before being written, so the raw database file does not contain usable credentials.
+The `key` file is the only plaintext secret on disk — protect it like a password. Credential fields inside `backup.db` are encrypted with it, so the raw database file contains no usable credentials.
 
----
+**Change detection** (during `upload`): compare size + mtime first; if either differs, compute a SHA-256 hash; upload only when the hash differs from the last backup — otherwise just refresh metadata. Files over **100 MB** upload via multipart automatically; smaller files go in a single request.
 
-## Change detection
-
-Before uploading, `backuprepo upload` checks each file against its stored record:
-
-1. If size **and** mtime are unchanged since the last backup — skip.
-2. If either differs — compute a SHA-256 content hash.
-3. If the hash matches the stored hash — update metadata, skip the upload.
-4. Otherwise — upload the file and record the new hash, size, mtime, and backup timestamp.
-
-Files larger than 100 MB are sent via S3 multipart upload automatically; files up to 100 MB use a single `PutObject` call.
+**Bucket name vs. ID:** B2 identifies a bucket two ways, and `bb` stores both — the **name** is used by the S3 API and by B2 downloads (`/file/<name>/<key>`); the **ID** is used by the native B2 API for listing and uploads. S3-only users can leave the ID blank.
 
 ---
 
 ## Roadmap (not yet implemented)
 
-The following features are designed and planned but not yet built:
+- **Background daemon** — real-time file watcher (`fsnotify`; `ReadDirectoryChangesW` on Windows) with a 5-minute full-scan fallback, uploading silently in the background.
+- **`bb start` / `bb stop`** — run/stop the daemon (with the web UI).
+- **`bb serve`** — start only the web UI.
+- **Web UI (port 9171)** — localhost interface showing folder contents, last-backup times, delete actions, and a force-upload button.
 
-- **Background daemon** — filesystem event watcher (`fsnotify` on Linux/macOS, `ReadDirectoryChangesW` on Windows) with a 5-minute full-scan fallback. Will run uploads silently in the background.
-- **`backuprepo start`** — start daemon + web UI together.
-- **`backuprepo stop`** — gracefully stop the running daemon.
-- **`backuprepo serve`** — start only the web UI (port 9171) without the daemon.
-- **Web UI (port 9171)** — localhost-bound interface showing folder contents with file metadata, last-backup timestamps, delete actions, and a force-upload button.
-
-Design details for all of the above are in `docs/superpowers/`.
+Design notes for all of the above live in `docs/superpowers/`.
 
 ---
 
