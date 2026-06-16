@@ -284,6 +284,15 @@ func (s *Store) UpsertFile(ctx context.Context, r FileRecord) error {
 	return nil
 }
 
+// RemoveFile deletes a tracked file record by path (idempotent — no error if
+// the path was not tracked).
+func (s *Store) RemoveFile(ctx context.Context, path string) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM files WHERE path=?`, path); err != nil {
+		return fmt.Errorf("%w: remove file: %v", apperr.ErrStore, err)
+	}
+	return nil
+}
+
 // ListFiles returns all tracked file records sorted by path.
 func (s *Store) ListFiles(ctx context.Context) ([]FileRecord, error) {
 	rows, err := s.db.QueryContext(ctx,

@@ -43,8 +43,32 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 - **Description**: Fixed the flag-ordering footgun (stdlib `flag.Parse` stops at the first positional, so trailing `-r`/`-f`/`--backend` were silently dropped on `ls`/`get`/`put`/`rm`/`find`). Added `parseFlags` in `main.go` that resumes parsing after each positional, returning positionals; all five commands now use it (`argAt` for safe indexing). Added `TestParseFlagsAnyOrder`. Updated `README.md` into a fuller user guide: `make`/`bb` build+install section, binary-name note, and a flag-position note.
 - **Notes**: Verified live — `bb ls <path> --backend bogus` now errors (flag parsed) where it previously didn't. See bugs.md 2026-06-16 (flag ordering).
 
+### 2026-06-16 - Background watcher daemon (fsnotify + debounce)
+- **Status**: Implemented on working tree (uncommitted). `go test ./...` green incl. `-race`; `go vet`/`gofmt` clean. Not yet committed/merged.
+- **Description**: Built the first roadmap item — the background file-watcher daemon. New `internal/daemon` package:
+  - Recursive fsnotify watch setup (`addRecursive`) — inotify is not recursive, so every subdir is watched and newly created dirs are re-watched at runtime (Create-on-dir handler).
+  - Event loop reacting to `Create|Write|Rename` (Rename covers atomic-save editors; `Chmod`/`Remove` ignored — the backup flow is upload-only), a 5-minute fallback full scan, PID-file lifecycle (`~/backup_repo/daemon.pid`), and graceful shutdown via `signal.NotifyContext` (SIGINT/SIGTERM).
+  - Both the event path and the ticker funnel into the existing `backup.Service.UploadChanged`, so change-detection semantics have one definition.
+  - Debounce: a two-timer state machine — **1 s** quiet window (reset on every event) + **5 s** max-delay cap (starvation guard) — with re-scan-all granularity. Windows are `Daemon` fields defaulted in `New` (tunable; set small in tests).
+  - Wired `start`/`stop` into `main.go` dispatch + `usage`; added typed `apperr.ErrDaemon`; thin `cli.Start`/`cli.Stop` wrappers.
+  - Tests (`internal/daemon/daemon_test.go`): burst coalescing → 1 flush, max-delay forces a flush under a trickle, cancel exits the goroutine, `addRecursive` watches root+subdirs, PID guard refuses a second start.
+  - Added dependency `github.com/fsnotify/fsnotify v1.10.1` (see ADR-012).
+- **Notes**: Linux-focused — `syscall.SIGTERM` and non-recursive inotify handling assume Unix; Windows (`ReadDirectoryChangesW`, natively recursive) needs build-tagged variants. Binary still ~14 MB. Still pending: web UI / `serve` (port 9171); deletion propagation (daemon is upload-only); commit/merge; README still says the daemon is not built.
+
+### 2026-06-16 - Deletion propagation (opt-in)
+- **Status**: Implemented on working tree (uncommitted). `go test ./...` green incl. `-race`; vet/gofmt clean.
+- **Description**: Made `UploadChanged` able to remove remote objects whose local files were deleted, **opt-in** via `--delete` on `upload` and `start` (see ADR-013):
+  - New `b2.Deleter` interface (`Delete` only); `backup.Service` keeps its narrow `b2.Uploader` dep and gains an optional deleter via `WithDeleter` (nil = off, the default).
+  - `backup.propagateDeletions` runs after the upload walk: deletes remote + local record for tracked files now absent under a **currently-present** watched folder. Unmounted-folder safety guard (skip if the folder is missing); uncertain stat errors never delete; `ErrObjectNotFound` treated as success.
+  - `store.RemoveFile`; `Result.Deleted`; `cli.Upload`/`cli.Start` widened to `b2.Backend` + `deleteRemoved`; `daemon.EnableDeletions` + flush reports deletions; `main.go` `--delete` FlagSets for `upload`/`start`; usage updated.
+  - Tests: disabled-by-default, removes-remote+record (keeps others), skips-missing-folder.
+- **Notes**: Opt-in only — default still retains backups. Versioned-bucket deletes purge all versions (irreversible). Daemon deletion uses scan reconciliation, not fsnotify `Remove` events. `unwatch`ed folders' objects persist by design.
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).
-- **Daemon + web UI (next spec)** — Background watcher (fsnotify + 5-min fallback scan), `serve`/`start`/`stop`, web UI on port 9171. Designed in `CLAUDE.md`; not yet built.
+- ~~**Daemon watcher + `start`/`stop`**~~ — BUILT 2026-06-16 (working tree; see work log + ADR-012): fsnotify recursive watch + 5-min fallback scan + 1s/5s debounce, graceful shutdown.
+- **Web UI / `serve` (port 9171)** — still not built. Localhost interface: folder table, last-backup times, delete actions, force-upload button (designed in `CLAUDE.md`).
+- **Windows event backend** — `ReadDirectoryChangesW` (build-tagged) to replace the Linux-only `syscall.SIGTERM` / non-recursive inotify handling in `internal/daemon`.
+- ~~**Deletion propagation**~~ — DONE 2026-06-16 (working tree; see work log + ADR-013): opt-in `--delete` on `upload`/`start`, with an unmounted-folder safety guard.
 - **Minor follow-ups from final review** — `b2.Uploader.Exists` and the `size` param are unused forward-looking hooks; a couple of cosmetic nits (`copyInto` wrapper, `usage(*os.File)` vs `io.Writer`).

@@ -161,11 +161,17 @@ func Config(ctx context.Context, st *store.Store, out io.Writer) error {
 	return nil
 }
 
-// Upload force-scans watched folders and uploads changed files.
-func Upload(ctx context.Context, st *store.Store, up b2.Uploader, out io.Writer) error {
-	svc := backup.New(st, up)
+// Upload force-scans watched folders and uploads changed files. When
+// deleteRemoved is set, it also removes remote objects whose local files were
+// deleted (opt-in; destructive).
+func Upload(ctx context.Context, st *store.Store, be b2.Backend, deleteRemoved bool, out io.Writer) error {
+	svc := backup.New(st, be)
+	if deleteRemoved {
+		svc = svc.WithDeleter(be)
+	}
 	res, err := svc.UploadChanged(ctx)
-	fmt.Fprintf(out, "Uploaded: %d, Skipped: %d, Failed: %d\n", res.Uploaded, res.Skipped, res.Failed)
+	fmt.Fprintf(out, "Uploaded: %d, Skipped: %d, Deleted: %d, Failed: %d\n",
+		res.Uploaded, res.Skipped, res.Deleted, res.Failed)
 	return err
 }
 

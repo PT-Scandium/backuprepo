@@ -20,4 +20,5 @@ var (
 	ErrInvalidBackend     = errors.New("backuprepo: invalid backend (use 's3' or 'b2')")
 	ErrStore              = errors.New("backuprepo: database error")
 	ErrCrypto             = errors.New("backuprepo: encryption error")
+	ErrDaemon             = errors.New("backuprepo: daemon error")
 )

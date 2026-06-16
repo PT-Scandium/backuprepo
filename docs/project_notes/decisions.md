@@ -171,3 +171,48 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ Code, spec, and key_facts now agree on v3.
 - ✅ httptest tests updated to the v3 auth shape and all pass; vet/gofmt clean.
 - ❌ Live B2 verification with real credentials still pending (httptest cannot exercise real auth) — folded into the existing "Manual B2 end-to-end test" in `issues.md`. A wrong nested-mapping would fail loudly at authorize, not silently.
+
+### ADR-012: Add fsnotify for the watcher daemon, paired with a fallback scan (2026-06-16)
+
+**Context:**
+- The background daemon (roadmap) needs real-time filesystem change detection. `CLAUDE.md` names `fsnotify` (Linux/macOS) and `ReadDirectoryChangesW` (Windows).
+- The project leans toward minimal/stdlib dependencies (the native B2 client was hand-rolled over `net/http`, ADR-008) and already exceeds its <10 MB binary goal (~14 MB, ADR-007). Adding any runtime dependency deserves a conscious decision.
+
+**Decision:**
+- Add `github.com/fsnotify/fsnotify` (v1.10.1) as the cross-platform filesystem-event source for the daemon's real-time path, in a new `internal/daemon` package, rather than driving OS syscalls directly.
+- Pair the event watcher with a 5-minute full-scan fallback (`daemon.FallbackInterval`) so correctness never depends on event delivery: inotify can drop events on queue overflow, on the race before a new dir's watch is added, and entirely while the daemon is down. The fast path gives low latency; the scan guarantees eventual consistency.
+- Both paths funnel into the existing `backup.Service.UploadChanged` so change detection has one definition. Event bursts are coalesced by a 1s-quiet / 5s-max-delay debouncer (recorded in `key_facts.md`).
+
+**Alternatives Considered:**
+- Hand-roll `golang.org/x/sys/unix` inotify + `ReadDirectoryChangesW` → Rejected: substantial, error-prone per-platform syscall code (watch-descriptor bookkeeping, event coalescing, rename semantics) that reinvents a well-maintained, widely-used library. Unlike ADR-008 — where the B2 API was simple JSON-over-HTTP — the OS event APIs are gnarly enough that the dependency earns its place.
+- Poll-only (periodic full scan, no events) → Rejected: a 5-minute latency floor defeats the spec's "catch changes early, keep uploads incremental" goal.
+
+**Consequences:**
+- ✅ Cross-platform event watching from one small, pure-Go dependency — no CGO, static binary preserved, binary stays ~14 MB (ADR-007 unchanged in practice).
+- ✅ Reuses `UploadChanged`; the daemon is ~one package of glue, not a second change-detection engine.
+- ❌ First third-party *runtime* dependency added since the aws-sdk/sqlite baseline — a small supply-chain surface increase.
+- ❌ inotify is not recursive: subdirectories are watched individually and new dirs re-watched at runtime (`daemon.addRecursive` + the Create handler). Windows `ReadDirectoryChangesW` is natively recursive, so platform parity needs build-tagged code later (tracked in `issues.md`).
+
+### ADR-013: Deletion propagation is opt-in, scoped to present watched folders, via an optional Deleter (2026-06-16)
+
+**Context:**
+- `UploadChanged` was upload-only: a locally deleted file kept its remote object and DB record forever. Roadmap/`issues.md` flagged deletion propagation.
+- ADR-006/008 deliberately kept `backup.Service` depending only on the narrow `b2.Uploader` (no `Delete`).
+
+**Decision:**
+- Deletion propagation is **opt-in, never default** — `bb upload --delete` and `bb start --delete`. The default keeps retaining backups when local files vanish (the backup-appropriate conservative default; mirrors rsync requiring an explicit `--delete`).
+- Add a narrow `b2.Deleter` interface (`Delete` only); `Backend`/`FakeBackend` already satisfy it. `backup.Service` keeps its `b2.Uploader` dependency and gains an **optional** `del b2.Deleter` (nil = off), set via `WithDeleter`. This preserves ADR-008 segregation: backup needs `Delete` only when deletion is enabled.
+- Detection (after the upload walk): for each tracked file whose path is under a **currently-existing** watched folder and is now absent on disk (`os.IsNotExist`), delete the remote object by `remote_key`, then remove the local record. Uncertain stat errors (permission/I/O) never trigger deletion. An already-absent remote (`ErrObjectNotFound`) counts as success so retries still clear the record.
+- **Safety guard:** skip deletions under any watched folder not currently present as a directory — an unmounted drive must not be read as "the user deleted everything." Covered by `TestDeletionPropagationSkipsMissingFolder`.
+
+**Alternatives Considered:**
+- Default-on deletion → Rejected: destroys a backup's core value (recovering deleted files); a footgun.
+- Widen `backup.Service` to the full `b2.Backend` → Rejected: breaks ADR-008 segregation; the optional `Deleter` is the minimal extension.
+- Drive deletes from fsnotify `Remove` events in the daemon → Rejected for now: scan-based reconciliation is one source of truth for both `upload` and the daemon; an event path could drift, and the fallback scan already converges.
+
+**Consequences:**
+- ✅ Safe default preserved; no surprise data loss. Interface segregation intact (optional `Deleter`).
+- ✅ Unmounted-drive guard prevents catastrophic mass-deletion; identical behavior for `upload --delete` and `start --delete` (both via `UploadChanged`).
+- ❌ Reconciliation is O(tracked files) `Lstat` calls per run — fine at current scale, optimizable later.
+- ❌ On a versioned bucket, a propagated delete purges ALL versions (existing backend `Delete` semantics) — irreversible remotely.
+- ❌ `unwatch` leaves records that are no longer under a watched folder, so they are never deletion candidates — those remote objects persist (intended: unwatch ≠ delete).

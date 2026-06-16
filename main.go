@@ -59,7 +59,12 @@ func run(args []string) int {
 	case "config":
 		err = cli.Config(ctx, st, os.Stdout)
 	case "upload":
-		err = runUpload(ctx, st)
+		fs := flag.NewFlagSet("upload", flag.ContinueOnError)
+		del := fs.Bool("delete", false, "also remove remote objects whose local files were deleted")
+		if _, e := parseFlags(fs, rest); e != nil {
+			return 1
+		}
+		err = runUpload(ctx, st, *del)
 	case "ls":
 		fs := flag.NewFlagSet("ls", flag.ContinueOnError)
 		recursive := fs.Bool("r", false, "recursive")
@@ -144,6 +149,15 @@ func run(args []string) int {
 			kind = rest[0]
 		}
 		err = cli.Backend(ctx, st, kind, os.Stdout)
+	case "start":
+		fs := flag.NewFlagSet("start", flag.ContinueOnError)
+		del := fs.Bool("delete", false, "also remove remote objects whose local files were deleted")
+		if _, e := parseFlags(fs, rest); e != nil {
+			return 1
+		}
+		err = runStart(ctx, st, cfg, *del)
+	case "stop":
+		err = cli.Stop(ctx, cfg.Dir, os.Stdout)
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -183,12 +197,22 @@ func argAt(pos []string, i int) string {
 	return ""
 }
 
-func runUpload(ctx context.Context, st *store.Store) error {
-	up, err := buildBackend(ctx, st, "")
+func runUpload(ctx context.Context, st *store.Store, deleteRemoved bool) error {
+	be, err := buildBackend(ctx, st, "")
 	if err != nil {
 		return err
 	}
-	return cli.Upload(ctx, st, up, os.Stdout)
+	return cli.Upload(ctx, st, be, deleteRemoved, os.Stdout)
+}
+
+// runStart builds the effective backend and launches the watcher daemon, which
+// blocks until interrupted or stopped.
+func runStart(ctx context.Context, st *store.Store, cfg *config.Config, deleteRemoved bool) error {
+	be, err := buildBackend(ctx, st, "")
+	if err != nil {
+		return err
+	}
+	return cli.Start(ctx, st, be, deleteRemoved, cfg.Dir, os.Stdout)
 }
 
 // effectiveBackend resolves the backend kind: flag override → stored → "s3".
@@ -235,7 +259,13 @@ BACKUP  (watch local folders, upload changed files)
   unwatch <dir>              Remove a folder from the watch list
   list                       List watched folders + tracked files (last-backup times)
   status                     Configured? backend, watched folders, pending uploads
-  upload                     Upload all changed files now (no-op if nothing changed)
+  upload [--delete]          Upload all changed files now (no-op if nothing changed)
+                               --delete also removes remote objects whose local files were deleted
+
+DAEMON  (background watcher: real-time fsnotify events + 5-min fallback scan)
+  start [--delete]           Watch all folders and back up changes until stopped (foreground)
+  stop                       Signal a running daemon to shut down gracefully
+                               --delete propagates local deletions to the remote (destructive)
 
 STORAGE BACKEND  (mode — applies to upload and all file operations)
   backend [s3|b2]            Show or set the backend. Default: s3

@@ -26,7 +26,9 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
 - Multipart upload threshold (S3 backend): **100 MB** (≤100 MB → single PutObject via transfer manager; >100 MB → S3 multipart)
 - B2 native small-file limit (`b2SmallFileLimit`): **100 MB** (≤100 MB → single `b2_upload_file`; >100 MB → B2 large-file multipart via `b2_start_large_file` / `b2_upload_part` / `b2_finish_large_file`)
 - Web UI port (planned, not built): **9171**
-- Fallback full-scan interval (planned daemon): **5 minutes**
+- Daemon fallback full-scan interval (`daemon.FallbackInterval`): **5 minutes** (built)
+- Daemon debounce (defaults in `daemon.New`, tunable via `Daemon` fields): **1 s** quiet window (reset on every event) + **5 s** max-delay cap (starvation guard); re-scan-all granularity
+- Deletion propagation: **opt-in** via `--delete` on `upload`/`start` (off by default). Removes remote object + local record for tracked files deleted under a still-present watched folder; **skipped entirely if the watched folder is missing** (unmount guard). See ADR-013.
 
 ### Storage backends
 
@@ -62,9 +64,10 @@ Available once configured; all accept `--backend s3|b2`:
 - `config` — `~/backup_repo` paths + master-key file
 - `store` — SQLite persistence (encrypted creds, folders, files, backend mode)
 - `b2` — `Backend` interface (embeds `Uploader`), `S3Backend`, `B2Backend`, `FakeBackend`; `NewBackend` factory
-- `backup` — folder walk + change detection + upload orchestration (depends only on `b2.Uploader`)
-- `cli` — subcommand handlers incl. `Ls`/`Get`/`Put`/`Rm`/`Find`/`Backend` (io injected for testability)
-- root `main.go` — dispatch + per-command FlagSet + effective-backend factory
+- `backup` — folder walk + change detection + upload orchestration (depends on `b2.Uploader`; optional `b2.Deleter` via `WithDeleter` enables opt-in deletion propagation)
+- `daemon` — background watcher (built 2026-06-16): recursive fsnotify watch + 5-min fallback scan + 1s/5s debounce; `start`/`stop` lifecycle (PID file `~/backup_repo/daemon.pid`, graceful shutdown). Depends on `store` + `b2.Uploader` via `backup.Service`.
+- `cli` — subcommand handlers incl. `Ls`/`Get`/`Put`/`Rm`/`Find`/`Backend` + `Start`/`Stop` (io injected for testability)
+- root `main.go` — dispatch (incl. `start`/`stop`) + per-command FlagSet + effective-backend factory
 
 ### Reference docs
 
