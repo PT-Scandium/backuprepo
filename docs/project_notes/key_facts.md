@@ -69,7 +69,7 @@ Available once configured; all accept `--backend s3|b2`:
 - `store` — SQLite persistence (encrypted creds, folders, files, backend mode); `SetBucket` switches the destination bucket name + ID; `SetCredentials` re-encrypts a new applicationKey (+ optional keyID) in one statement — all without touching the rest of the config
 - `b2` — `Backend` interface (embeds `Uploader`), `S3Backend`, `B2Backend`, `FakeBackend`; `NewBackend` factory
 - `backup` — folder walk + change detection + upload orchestration (depends on `b2.Uploader`; optional `b2.Deleter` via `WithDeleter` enables opt-in deletion propagation)
-- `daemon` — background watcher (built 2026-06-16): recursive fsnotify watch + 5-min fallback scan + 1s/5s debounce; `start`/`stop` lifecycle (PID file `~/backup_repo/daemon.pid`, graceful shutdown). Depends on `store` + `b2.Uploader` via `backup.Service`.
+- `daemon` — background watcher (built 2026-06-16): recursive fsnotify watch + 5-min fallback scan + 1s/5s debounce; `start`/`stop` lifecycle (PID file `~/backup_repo/daemon.pid`). Runs on **Linux + Windows** — OS-specific signal/stop/liveness logic lives in build-tagged `signals_unix.go` / `signals_windows.go` (ADR-014); Windows `stop` is forceful (`proc.Kill`), Unix is graceful (SIGTERM). Depends on `store` + `b2.Uploader` via `backup.Service`.
 - `cli` — subcommand handlers incl. `Ls`/`Get`/`Put`/`Rm`/`Find`/`Backend`/`Bucket`/`SetAppKey` + `Start`/`Stop` (io injected for testability)
 - root `main.go` — dispatch (incl. `start`/`stop`/`bucket`) + per-command FlagSet + effective-backend factory
 

@@ -83,11 +83,20 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   - Tests: change-secret-only (other fields intact, secret not leaked to output), rotate keyID+secret, empty rejected keeps old, requires config.
 - **Notes**: Born from the 2026-06-16 key-exposure incident — the stdin-only design is the deliberate fix for "don't put secrets on the command line." No-echo interactive entry (`golang.org/x/term`) is a possible future enhancement; piping is the secure path today. No new ADR (operates within the existing credential model).
 
+### 2026-06-16 - Windows daemon backend (build-tagged lifecycle)
+- **Status**: Implemented on branch `feat/windows-daemon` (off `master`). Linux `go test ./...` green; **`GOOS=windows` build + vet pass** and the Windows binary links (`PE32+`).
+- **Description**: Made the daemon run on Windows by splitting the OS-specific process-lifecycle pieces out of `daemon.go` into build-tagged files (see ADR-014):
+  - `signals_unix.go` (`//go:build !windows`) and `signals_windows.go` (`//go:build windows`) each provide `shutdownSignals()`, `signalStop(proc)`, `processAlive(pid)`.
+  - `daemon.go` is now platform-agnostic (dropped its `syscall` import); `Run` uses `shutdownSignals()...`, `Stop` uses `signalStop`.
+  - Unix: SIGINT/SIGTERM graceful, SIGTERM stop, signal-0 liveness. Windows: Ctrl-C graceful in foreground, `proc.Kill()` (forceful) for cross-process `stop`, `os.FindProcess` liveness.
+  - The file-watching half was already cross-platform (`fsnotify` → `ReadDirectoryChangesW` on Windows); only signals/process control needed splitting.
+- **Notes**: Windows `stop` is forceful (no graceful cleanup) — tolerated by the idempotent design (stale PID self-heals, upload retried). README updated with the Linux/Windows stop semantics. No platform-specific tests (can't portably kill self); the cross-compile build is the gate. Graceful Windows stop (named event via `x/sys/windows`) is a possible future enhancement.
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).
 - ~~**Daemon watcher + `start`/`stop`**~~ — BUILT 2026-06-16 (working tree; see work log + ADR-012): fsnotify recursive watch + 5-min fallback scan + 1s/5s debounce, graceful shutdown.
 - **Web UI / `serve` (port 9171)** — still not built. Localhost interface: folder table, last-backup times, delete actions, force-upload button (designed in `CLAUDE.md`).
-- **Windows event backend** — `ReadDirectoryChangesW` (build-tagged) to replace the Linux-only `syscall.SIGTERM` / non-recursive inotify handling in `internal/daemon`.
+- ~~**Windows daemon backend**~~ — DONE 2026-06-16 (branch `feat/windows-daemon`; see work log + ADR-014): build-tagged `signals_{unix,windows}.go`; fsnotify already provided `ReadDirectoryChangesW`, so only signals/process control needed splitting. Windows `stop` is forceful.
 - ~~**Deletion propagation**~~ — DONE 2026-06-16 (working tree; see work log + ADR-013): opt-in `--delete` on `upload`/`start`, with an unmounted-folder safety guard.
 - **Minor follow-ups from final review** — `b2.Uploader.Exists` and the `size` param are unused forward-looking hooks; a couple of cosmetic nits (`copyInto` wrapper, `usage(*os.File)` vs `io.Writer`).

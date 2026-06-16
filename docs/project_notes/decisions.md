@@ -216,3 +216,24 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ❌ Reconciliation is O(tracked files) `Lstat` calls per run — fine at current scale, optimizable later.
 - ❌ On a versioned bucket, a propagated delete purges ALL versions (existing backend `Delete` semantics) — irreversible remotely.
 - ❌ `unwatch` leaves records that are no longer under a watched folder, so they are never deletion candidates — those remote objects persist (intended: unwatch ≠ delete).
+
+### ADR-014: Cross-platform daemon lifecycle via build-tagged signal files; forceful stop on Windows (2026-06-16)
+
+**Context:**
+- The daemon (ADR-012) was Linux-shaped in its *process lifecycle*: `signal.NotifyContext(…, syscall.SIGTERM)`, `bb stop` via `proc.Signal(syscall.SIGTERM)`, and a `processAlive` liveness probe via signal 0 — none valid on Windows.
+- The *file-watching* half was already cross-platform: `fsnotify` wraps inotify on Linux and `ReadDirectoryChangesW` on Windows, both per-directory, so `addRecursive` applies on both. The gap was signals/process control, not events.
+
+**Decision:**
+- Extract the three OS-specific pieces — `shutdownSignals()`, `signalStop(proc)`, `processAlive(pid)` — into build-tagged files: `signals_unix.go` (`//go:build !windows`) and `signals_windows.go` (`//go:build windows`). `daemon.go` stays platform-agnostic and calls them.
+- **Unix:** graceful — Run catches SIGINT/SIGTERM; `signalStop` sends SIGTERM so deferred cleanup runs; liveness via signal 0.
+- **Windows:** `shutdownSignals` = `{os.Interrupt}` (foreground Ctrl-C is graceful); cross-process `signalStop` = `proc.Kill()` (forceful `TerminateProcess`); liveness via `os.FindProcess` (fails for dead PIDs on Windows).
+
+**Alternatives Considered:**
+- `golang.org/x/sys/windows` named event / job object for graceful Windows stop → Rejected for now: new dependency + more code. The daemon already tolerates abrupt termination (stale PID self-heals via `writePID`, uploads are idempotent), so forceful stop is acceptable for v1. Revisit if graceful Windows `stop` is required.
+- `GenerateConsoleCtrlEvent` → Rejected: only works within the same console group; unreliable cross-process.
+
+**Consequences:**
+- ✅ `go build`/`go vet` pass for both `GOOS=linux` and `GOOS=windows`; the right file is selected per platform from one codebase. Windows binary links (`PE32+`).
+- ✅ Foreground Ctrl-C is graceful on both OSes.
+- ❌ `bb stop` on Windows is forceful: the in-flight upload is aborted (retried next run) and the PID file is left stale (overwritten on next start). Documented in README.
+- ❌ Windows `processAlive` is coarser than Unix's signal-0 (handle-open ≈ alive) — adequate for the double-start guard.
