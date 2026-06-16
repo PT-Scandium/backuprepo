@@ -108,7 +108,7 @@ backuprepo config              # Show current configuration (server URL, watched
 
 ---
 
-This repository is in early development. Licensed under MIT (PT-Scandium).
+This repository is feature-complete against the spec above (see Implementation status). Licensed under MIT (PT-Scandium).
 
 ## Build/Test/Lint Commands
 
@@ -118,11 +118,17 @@ This repository is in early development. Licensed under MIT (PT-Scandium).
 
 ## Implementation status (read before relying on the spec above)
 
-The spec above is the original aspirational design. The **core CLI is implemented and merged** (`internal/{apperr,crypto,config,store,b2,backup,cli}` + `main.go`; subcommands `init`/`watch`/`unwatch`/`list`/`status`/`upload`/`config`). The **daemon and web UI (port 9171) are NOT yet built.**
+The spec above is the original aspirational design. **As of 2026-06-16 the project is feature-complete against this spec** — everything below is implemented and merged to `master` (Go packages under `internal/{apperr,crypto,config,store,b2,backup,daemon,web,cli}` + `main.go`):
 
-A **native Backblaze B2 backend** (`B2Backend`, B2 v3 API over stdlib `net/http`) now exists alongside the S3-compatible backend (`S3Backend`), behind a unified `b2.Backend` interface. Six **manual bucket commands** are implemented: `ls`, `get`, `put`, `rm`, `find`, and `backend`. Switch backends persistently with `backuprepo backend [s3|b2]` or per-command with `--backend s3|b2`. The stored backend defaults to `s3`.
+- **Core CLI** — `init`, `watch`, `unwatch`, `list`, `status`, `upload`, `config`.
+- **Dual backend** — `S3Backend` (aws-sdk) and a **native `B2Backend`** (B2 **v3** API over stdlib `net/http`) behind a unified `b2.Backend` interface. Switch with `backuprepo backend [s3|b2]` (default `s3`) or per-command `--backend s3|b2`.
+- **Manual bucket commands** — `ls`, `get`, `put`, `rm`, `find`, `backend`.
+- **Partial reconfig (no full `init`)** — `bucket [<name> [<id>]]` switches the destination bucket; `appkey [<new-keyID>]` rotates the application key (secret read from stdin, never argv).
+- **Background daemon** — `start` / `stop`: real-time `fsnotify` watcher + 1s/5s debounce + 5-minute fallback scan, PID-file lifecycle. **Runs on Linux and Windows** (OS-specific signal/stop logic in build-tagged `internal/daemon/signals_{unix,windows}.go`; Windows `stop` is forceful).
+- **Opt-in deletion propagation** — `upload --delete` / `start --delete` removes remote objects whose local files were deleted (off by default; unmounted-folder safety guard).
+- **Web UI (port 9171)** — `serve`: localhost-only (`127.0.0.1`), no auth per spec but with a Host-header + `Origin`/`Referer` CSRF guard, browsing/deletion confined to watched folders; warm-themed folder table, Upload + Close buttons, destructive (local + remote) delete behind a confirm.
 
-Several invariants above were deliberately changed in implementation — see `docs/project_notes/decisions.md` for the authoritative record. Notably: DB uses **pure-Go SQLite + AES-256-GCM field encryption, NOT SQLCipher** (ADR-001); uploads are **per-file, not tar+gzip** (ADR-003); `init` collects **both bucket name and bucket ID** (bucket name for S3 + B2 download, bucket ID for B2 list/upload — ADR-010 supersedes ADR-004); typed errors live in `internal/apperr`, not a root `errors.go` (ADR-005).
+Several invariants above were deliberately changed in implementation — see `docs/project_notes/decisions.md` for the authoritative record (ADRs 001–015). Notably: DB uses **pure-Go SQLite + AES-256-GCM field encryption, NOT SQLCipher** (ADR-001); uploads are **per-file, not tar+gzip** (ADR-003); `init` collects **both bucket name and bucket ID** (bucket name for S3 + B2 download, bucket ID for B2 list/upload — ADR-010 supersedes ADR-004); typed errors live in `internal/apperr`, not a root `errors.go` (ADR-005); the daemon adds an `fsnotify` dependency (ADR-012). Remaining items are optional polish only (graceful Windows `stop`, no-echo `appkey` entry, leaner binary).
 
 ## Project Memory System
 
