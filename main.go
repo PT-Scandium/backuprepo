@@ -144,6 +144,10 @@ func run(args []string) int {
 			kind = rest[0]
 		}
 		err = cli.Backend(ctx, st, kind, os.Stdout)
+	case "start":
+		err = runStart(ctx, st, cfg)
+	case "stop":
+		err = cli.Stop(ctx, cfg.Dir, os.Stdout)
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -191,6 +195,16 @@ func runUpload(ctx context.Context, st *store.Store) error {
 	return cli.Upload(ctx, st, up, os.Stdout)
 }
 
+// runStart builds the effective backend and launches the watcher daemon, which
+// blocks until interrupted or stopped.
+func runStart(ctx context.Context, st *store.Store, cfg *config.Config) error {
+	up, err := buildBackend(ctx, st, "")
+	if err != nil {
+		return err
+	}
+	return cli.Start(ctx, st, up, cfg.Dir, os.Stdout)
+}
+
 // effectiveBackend resolves the backend kind: flag override → stored → "s3".
 func effectiveBackend(ctx context.Context, st *store.Store, override string) (string, error) {
 	if override != "" {
@@ -236,6 +250,10 @@ BACKUP  (watch local folders, upload changed files)
   list                       List watched folders + tracked files (last-backup times)
   status                     Configured? backend, watched folders, pending uploads
   upload                     Upload all changed files now (no-op if nothing changed)
+
+DAEMON  (background watcher: real-time fsnotify events + 5-min fallback scan)
+  start                      Watch all folders and back up changes until stopped (foreground)
+  stop                       Signal a running daemon to shut down gracefully
 
 STORAGE BACKEND  (mode — applies to upload and all file operations)
   backend [s3|b2]            Show or set the backend. Default: s3

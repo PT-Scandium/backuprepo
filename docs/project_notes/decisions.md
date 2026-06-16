@@ -171,3 +171,24 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ Code, spec, and key_facts now agree on v3.
 - ✅ httptest tests updated to the v3 auth shape and all pass; vet/gofmt clean.
 - ❌ Live B2 verification with real credentials still pending (httptest cannot exercise real auth) — folded into the existing "Manual B2 end-to-end test" in `issues.md`. A wrong nested-mapping would fail loudly at authorize, not silently.
+
+### ADR-012: Add fsnotify for the watcher daemon, paired with a fallback scan (2026-06-16)
+
+**Context:**
+- The background daemon (roadmap) needs real-time filesystem change detection. `CLAUDE.md` names `fsnotify` (Linux/macOS) and `ReadDirectoryChangesW` (Windows).
+- The project leans toward minimal/stdlib dependencies (the native B2 client was hand-rolled over `net/http`, ADR-008) and already exceeds its <10 MB binary goal (~14 MB, ADR-007). Adding any runtime dependency deserves a conscious decision.
+
+**Decision:**
+- Add `github.com/fsnotify/fsnotify` (v1.10.1) as the cross-platform filesystem-event source for the daemon's real-time path, in a new `internal/daemon` package, rather than driving OS syscalls directly.
+- Pair the event watcher with a 5-minute full-scan fallback (`daemon.FallbackInterval`) so correctness never depends on event delivery: inotify can drop events on queue overflow, on the race before a new dir's watch is added, and entirely while the daemon is down. The fast path gives low latency; the scan guarantees eventual consistency.
+- Both paths funnel into the existing `backup.Service.UploadChanged` so change detection has one definition. Event bursts are coalesced by a 1s-quiet / 5s-max-delay debouncer (recorded in `key_facts.md`).
+
+**Alternatives Considered:**
+- Hand-roll `golang.org/x/sys/unix` inotify + `ReadDirectoryChangesW` → Rejected: substantial, error-prone per-platform syscall code (watch-descriptor bookkeeping, event coalescing, rename semantics) that reinvents a well-maintained, widely-used library. Unlike ADR-008 — where the B2 API was simple JSON-over-HTTP — the OS event APIs are gnarly enough that the dependency earns its place.
+- Poll-only (periodic full scan, no events) → Rejected: a 5-minute latency floor defeats the spec's "catch changes early, keep uploads incremental" goal.
+
+**Consequences:**
+- ✅ Cross-platform event watching from one small, pure-Go dependency — no CGO, static binary preserved, binary stays ~14 MB (ADR-007 unchanged in practice).
+- ✅ Reuses `UploadChanged`; the daemon is ~one package of glue, not a second change-detection engine.
+- ❌ First third-party *runtime* dependency added since the aws-sdk/sqlite baseline — a small supply-chain surface increase.
+- ❌ inotify is not recursive: subdirectories are watched individually and new dirs re-watched at runtime (`daemon.addRecursive` + the Create handler). Windows `ReadDirectoryChangesW` is natively recursive, so platform parity needs build-tagged code later (tracked in `issues.md`).
