@@ -237,3 +237,27 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ Foreground Ctrl-C is graceful on both OSes.
 - ❌ `bb stop` on Windows is forceful: the in-flight upload is aborted (retried next run) and the PID file is left stale (overwritten on next start). Documented in README.
 - ❌ Windows `processAlive` is coarser than Unix's signal-0 (handle-open ≈ alive) — adequate for the double-start guard.
+
+### ADR-015: Web UI is localhost-only, unauthenticated, confined to watched folders; delete is local+remote with confirmation (2026-06-16)
+
+**Context:**
+- `CLAUDE.md` specifies a port-9171 web UI with **no authentication** ("the user is already authenticated at first launch"), a warm color scheme, a per-file table, breadcrumb folder navigation, a force-upload button, a close button, and a trash-can delete action. "No auth" + a delete button is a security-sensitive combination.
+
+**Decision:**
+- New `internal/web` package over **stdlib `net/http` + `html/template`** (no new dependency). `bb serve` runs it in the foreground; `bb start` stays daemon-only (the spec pairs them, but keeping `serve` standalone avoids changing freshly-shipped `start` behavior — user choice, 2026-06-16).
+- **Bind `127.0.0.1` only** and reject any request whose `Host` header isn't `localhost`/`127.0.0.1` (DNS-rebinding guard) — the spec's "no auth" is acceptable only because the surface is local.
+- **Confine browsing and deletion to watched folders** (lexical `filepath.Rel` check, same idea as `get -r`'s `underBase`). A no-auth local server must never list or delete arbitrary paths (`/etc`, `$HOME`).
+- The table reads the **local filesystem** (name/type/size/mtime/owner) joined with **backup state** from the store (`Last Backup`). OS owner via build-tagged `owner_unix.go` (uid → `user.LookupId`) / `owner_windows.go` (stub `—`).
+- **Delete = local file AND remote object**, unrecoverable (user choice, 2026-06-16). Guarded by a JS `confirm()`; for a directory it purges the remote object of every tracked file beneath it, then removes the local tree. Remote delete happens before local so a failure leaves the file intact.
+- **Close** button gracefully shuts the server down (POST `/close` → `srv.Shutdown`), so `bb serve` exits cleanly.
+
+**Alternatives Considered:**
+- Add auth / a token → Rejected: contradicts the spec; localhost binding + Host guard is the intended trust model.
+- A JS SPA / templating dependency → Rejected: a single server-rendered `html/template` page keeps it dependency-free and tiny.
+- Delete remote-only or local-only → user chose local+remote (the most destructive, literal reading); mitigated with a confirm dialog.
+
+**Consequences:**
+- ✅ Feature-complete vs the spec; no new dependency; localhost-only, path-confined, Host-guarded.
+- ✅ Handlers unit-tested via `httptest` (listing, traversal 403, Host-guard 403, upload, local+remote delete); live-verified end to end.
+- ❌ Delete is irreversible by design — the confirm dialog is the only safety net (no trash/undo).
+- ❌ No auth at all — safe only on a trusted local machine; anyone with localhost access (or local code) can use it. CSRF is mitigated only by the Host guard + localhost binding.

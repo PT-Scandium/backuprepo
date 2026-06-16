@@ -168,6 +168,8 @@ func run(args []string) int {
 		err = runStart(ctx, st, cfg, *del)
 	case "stop":
 		err = cli.Stop(ctx, cfg.Dir, os.Stdout)
+	case "serve":
+		err = runServe(ctx, st)
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -225,6 +227,15 @@ func runStart(ctx context.Context, st *store.Store, cfg *config.Config, deleteRe
 	return cli.Start(ctx, st, be, deleteRemoved, cfg.Dir, os.Stdout)
 }
 
+// runServe builds the effective backend and launches the localhost web UI.
+func runServe(ctx context.Context, st *store.Store) error {
+	be, err := buildBackend(ctx, st, "")
+	if err != nil {
+		return err
+	}
+	return cli.Serve(ctx, st, be, os.Stdout)
+}
+
 // effectiveBackend resolves the backend kind: flag override → stored → "s3".
 func effectiveBackend(ctx context.Context, st *store.Store, override string) (string, error) {
 	if override != "" {
@@ -279,6 +290,7 @@ DAEMON  (background watcher: real-time fsnotify events + 5-min fallback scan)
   start [--delete]           Watch all folders and back up changes until stopped (foreground)
   stop                       Signal a running daemon to shut down gracefully
                                --delete propagates local deletions to the remote (destructive)
+  serve                      Start the localhost web UI on http://127.0.0.1:9171 (foreground)
 
 STORAGE BACKEND  (mode — applies to upload and all file operations)
   backend [s3|b2]            Show or set the backend. Default: s3
