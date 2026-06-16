@@ -5,10 +5,12 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"backuprepo/internal/apperr"
 	"backuprepo/internal/b2"
@@ -16,6 +18,13 @@ import (
 	"backuprepo/internal/config"
 	"backuprepo/internal/store"
 )
+
+// versionFile is the build version, embedded from the VERSION file at compile
+// time so `bb version` reports exactly what was built. See internal/version for
+// the numbering scheme.
+//
+//go:embed VERSION
+var versionFile string
 
 // main runs the CLI and exits with its status code.
 func main() {
@@ -173,6 +182,8 @@ func run(args []string) int {
 		err = cli.Stop(ctx, cfg.Dir, os.Stdout)
 	case "serve":
 		err = runServe(ctx, st)
+	case "version", "--version", "-v":
+		fmt.Fprintf(os.Stdout, "bb %s\n", strings.TrimSpace(versionFile))
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 	default:
@@ -279,6 +290,7 @@ USAGE
 SETUP
   init                       Interactive setup: credentials, bucket name, bucket ID, endpoint, region, first folder
   config                     Show current configuration (app key masked) + active backend
+  version                    Print the build version (e.g. 1.0.0)
   bucket [<name> [<id>]]     Show, or switch to another bucket (changes only name + ID; keeps credentials)
   appkey [<new-keyID>]       Replace the stored application key — reads the secret from stdin (keeps it out
                                of shell history); pass a new keyID to rotate the whole pair

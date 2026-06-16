@@ -26,14 +26,30 @@ export CGO_ENABLED := 0
 # Override, e.g.:  make install PREFIX=/usr/local/bin   (may need sudo)
 PREFIX ?= $(HOME)/.local/bin
 
-.PHONY: all build install uninstall clean test vet fmt tidy help
+.PHONY: all build install uninstall clean test vet fmt tidy help version bump bump-minor bump-major
 
 all: build
 
 ## build: compile the single `bb` binary into the repo root
 build:
 	$(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o $(BINARY) $(PKG)
-	@echo "Built ./$(BINARY) ($$(du -h $(BINARY) | cut -f1))"
+	@echo "Built ./$(BINARY) v$$(cat VERSION) ($$(du -h $(BINARY) | cut -f1))"
+
+## version: print the current build version (from the VERSION file)
+version:
+	@cat VERSION
+
+## bump: increment the patch version with carry (e.g. 1.0.20 -> 1.1.0)
+bump:
+	@$(GO) run ./cmd/bump patch
+
+## bump-minor: increment the minor version (resets patch; carries into major at 21)
+bump-minor:
+	@$(GO) run ./cmd/bump minor
+
+## bump-major: increment the major version (resets minor and patch)
+bump-major:
+	@$(GO) run ./cmd/bump major
 
 ## install: build, then copy `bb` to $(PREFIX) (a directory on your PATH)
 install: build

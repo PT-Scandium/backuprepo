@@ -119,6 +119,14 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   - Updated `main_test.go` (asserts the usage example, now `bb ls --backend s3`).
 - **Notes**: Deliberately **left unchanged**: import paths / module path (`backuprepo` — renaming breaks the build), project-name doc comments, `~/backup_repo` state dir, and the internal Windows stop-event id. See the naming-convention note in `key_facts.md`. Surgical (no global `backuprepo`→`bb`).
 
+### 2026-06-16 - Version tracking (VERSION file + odometer scheme + `bb version`)
+- **Status**: Implemented on branch `feat/versioning`. `go test ./...` green (incl. new `internal/version` tests); gofmt/vet clean; `GOOS=windows` build passes.
+- **Description**: Added a single-source-of-truth build version with a custom numbering scheme (per user spec):
+  - Root **`VERSION`** file (`1.0.0`), **embedded** into the binary via `//go:embed` in `main.go`; new **`bb version`** (`--version`/`-v`) prints it.
+  - **`internal/version`** — odometer scheme: `major.minor.patch`, each component `0..20`; passing 20 wraps to 0 and carries up (`1.0.20 → 1.1.0`, `1.20.20 → 2.0.0`); major unbounded. Pure + table-tested (`version_test.go`).
+  - **`cmd/bump`** + Makefile targets `version`, `bump` (patch+carry), `bump-minor`, `bump-major`; `make build` echoes `v<VERSION>`.
+- **Notes**: Bump rewrites `VERSION`; rebuild bakes the new value in. Release = git tag `v<VERSION>`. See key_facts "Versioning". Carry verified end-to-end via the bump tool (1.0.20→1.1.0, 1.20.20→2.0.0).
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).
