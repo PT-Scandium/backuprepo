@@ -41,6 +41,7 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
 
 - **`s3`** (default) — S3-compatible Backblaze B2 endpoint via `aws-sdk-go-v2`; addresses bucket by **name**.
 - **`b2`** — Native Backblaze B2 **v3 API** (`/b2api/v3/...`) over stdlib `net/http`; addresses bucket by **ID** for list/upload, by **name** for download. The `b2_authorize_account` response nests `apiUrl`/`downloadUrl`/`recommendedPartSize` under `apiInfo.storageApi` (v3 shape); its top-level `accountId` is captured into `b2Auth` for account-scoped calls (`b2_list_buckets`). API version lives in `b2APIVersion` in `native.go`.
+  - **Upload retry (v1.0.2, ADR-018):** `uploadWithRetry` retries both `b2_upload_file` and `b2_upload_part` up to **`b2MaxUploadAttempts` = 5** times, fetching a **fresh upload URL each attempt** (B2 issues a per-pod URL; a pod can be transiently unreachable). Retryable = connection errors + `408/429/5xx` + `401` (re-auths); `400/403` fail fast. Backoff 200ms→3s, ctx-aware.
 - **Account-level (native only):** `b2.ListBuckets(ctx, cfg)` / `(*B2Backend).ListBuckets` list all buckets (name + ID + type). Deliberately **not** on the `b2.Backend` interface (per-bucket ops only); backs `bb buckets` and the `init`/`bucket` ID auto-resolution. See ADR-017.
 - Stored in `backend TEXT` column of `config` table; `NULL`/empty defaults to `"s3"`.
 - Switch with `bb backend [s3|b2]`; override per-command with `--backend s3|b2`.

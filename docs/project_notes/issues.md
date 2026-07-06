@@ -137,6 +137,14 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   - Tests: `TestB2ListBuckets` (+ mock `b2_list_buckets` endpoint), `TestInitBucketIDFallback` (error/not-found/nil-lister), `TestBucketAutoResolvesID` (resolved + clears).
 - **Notes**: Live-verified against the user's account (listed 7 buckets: CCTV-KK130, CCTV-KK520, Family-Funeral, Family-Wedding, Rent-Contract-MDTM, SC-OFFICE, Sc-Coding). Surfaced + explained a stored name/ID mismatch (`Scandiumsc` name paired with `SC-OFFICE`'s ID) that `bb bucket <name>` now prevents. **Not yet committed/branched** — changes sit in the working tree.
 
+### 2026-07-06 - Upload retry on transient B2 pod failures (v1.0.2)
+- **Status**: Done — merged to `master` (`c612df5`), tagged **v1.0.2**, GitHub release published with linux/windows binaries + SHA256SUMS. `go test ./...`/vet/gofmt green. See ADR-018 + bugs.md.
+- **Description**: Fixed `bb put -r` aborting mid-batch when a single Backblaze storage pod was briefly unreachable (`connection refused` to a `pod-*.backblaze.com` upload URL). Added `uploadWithRetry` (native.go): up to `b2MaxUploadAttempts`=5, **fresh upload URL each attempt** (new pod), exponential backoff (200ms→3s, ctx-aware); retryable = conn errors + 408/429/5xx + 401 (re-auth), 400/403 fail fast. Wired into small-file `Upload` and large-file `uploadPart` (dropped its unused `auth` param). Tests: retries-then-succeeds, fails-fast-on-400, gives-up-after-5.
+- **Notes**: Discovered live while the user was backing up `MANDALATAMA-SEWA/` to SC-OFFICE. Follow-ups still open: make `put -r` continue-past-failures and skip already-uploaded files (`Exists` check) so re-runs are cheap.
+
+### 2026-07-06 - Release ops: v1.0.1 + v1.0.2 published
+- **Status**: Done. `v1.0.1` (bb buckets + auto-resolve) and `v1.0.2` (upload retry) both tagged, released on GitHub with `bb-vX-linux-amd64` + `bb-vX-windows-amd64.exe` + `SHA256SUMS` (cross-compiled `CGO_ENABLED=0 -trimpath -ldflags="-s -w"`), README download links bumped each time. Release flow: branch → commit → `merge --no-ff` → annotated tag → push master + tag → build binaries → `gh release create`.
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).
@@ -145,3 +153,4 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 - ~~**Windows daemon backend**~~ — DONE 2026-06-16 (branch `feat/windows-daemon`; see work log + ADR-014): build-tagged `signals_{unix,windows}.go`; fsnotify already provided `ReadDirectoryChangesW`, so only signals/process control needed splitting. Windows `stop` is forceful.
 - ~~**Deletion propagation**~~ — DONE 2026-06-16 (working tree; see work log + ADR-013): opt-in `--delete` on `upload`/`start`, with an unmounted-folder safety guard.
 - **Minor follow-ups from final review** — `b2.Uploader.Exists` and the `size` param are unused forward-looking hooks; a couple of cosmetic nits (`copyInto` wrapper, `usage(*os.File)` vs `io.Writer`).
+- **`put -r` batch resilience** (2026-07-06) — `cli.Put` still aborts the whole walk on the first per-file error, and re-uploads already-sent files (no `Exists` skip). ADR-018's upload retry handles *transient* failures; making the batch continue-past-failures (report a summary like `bb upload`) + skip unchanged files would make one genuinely-bad file non-fatal and re-runs cheap. `b2.Uploader.Exists` already exists to support the skip.

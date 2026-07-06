@@ -305,3 +305,26 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ `Backend` interface unchanged; `var _ Backend = (*B2Backend)(nil)` still holds. New tests: `TestB2ListBuckets`, `TestInitBucketIDFallback`, `TestBucketAutoResolvesID`; full suite + vet + gofmt green.
 - ⚠️ `bb buckets` and auto-resolve need a key with account-wide **`listBuckets`** capability; a **bucket-scoped** key sees only its own bucket (still enough to resolve *that* bucket's ID during init).
 - ⚠️ `bb bucket <name>` (no id) changed meaning: it now **auto-resolves** the ID rather than clearing it. It still clears on a failed/not-found lookup, so the old S3-only "clear the ID" path remains reachable when the name isn't in the account.
+
+### ADR-018: Retry B2 native uploads with a fresh upload URL on transient failures (2026-07-06)
+
+**Context:**
+- Backblaze's native API issues a **per-pod upload URL** from `b2_get_upload_url` / `b2_get_upload_part_url`; the file is then POSTed directly to that pod. An individual pod can be briefly unreachable (TCP connection refused/reset/timeout) or return 5xx. The client made a **single attempt**, so one dead pod failed the file — and because `cli.Put`'s `WalkDir` callback returns the error, a whole `bb put -r` batch aborted. Observed live: `pod-050-1046-12.backblaze.com` refused connections while the main API was healthy; re-running intermittently hit the same pod. (S3 SDKs hide pod routing and retry internally, so the `s3` backend never exposed this.)
+
+**Decision:**
+- Add **`uploadWithRetry`** (`internal/b2/native.go`) used by both the small-file `Upload` (`b2_upload_file`) and large-file `uploadPart` (`b2_upload_part`). Up to **`b2MaxUploadAttempts` = 5** attempts; **a fresh upload URL is fetched before every attempt** (`getURL` closure) so a retry lands on a new — usually healthy — pod, per Backblaze's documented remedy.
+- **Retryable**: transport errors from `http.Do`, and statuses `408/429/500/502/503/504`, plus `401` (an expired upload/auth token — the cached `b.auth` is cleared so the next `getURL` re-authorizes). **Non-retryable** (`400/403`, etc.) fail immediately.
+- **Backoff** (`b2Backoff`): 200ms, 400ms, 800ms … capped at 3s, waiting on a `select` over `ctx.Done()` so Ctrl-C aborts instantly.
+- `uploadPart` dropped its now-unused `*b2Auth` param (it re-authorizes via `b.authorize` inside `getURL`, enabling the 401→re-auth path). `start_large_file`/`finish_large_file` are left single-attempt (small JSON control calls, not the pod-routed data path).
+
+**Alternatives Considered:**
+- Re-POST to the **same** upload URL on failure → Rejected: a dead pod stays dead; only a *new* URL escapes it. This is why `getURL` is inside the retry loop.
+- Retry everything including `400/403` → Rejected: client errors can't be fixed by retrying; hammering the server is wrong. Split retryable vs fail-fast, pinned by tests.
+- Make `cli.Put` continue past failures / skip already-uploaded files → Deferred (still pending): retry addresses the *transient* cause; batch-resilience + `Exists`-skip are a separate robustness improvement.
+- Configurable retry count / backoff → Rejected for now: fixed sane defaults; revisit if needed.
+
+**Consequences:**
+- ✅ A single flaky pod no longer fails a file or aborts a `put -r` batch; uploads self-heal transparently. Matches B2's recommended client behavior.
+- ✅ Deterministic tests via a flaky-upload httptest server: retries-then-succeeds, fails-fast on 400, gives-up after 5. Full suite + vet + gofmt green; shipped as **v1.0.2**.
+- ⚠️ A hard-down account (every pod failing) now takes up to 5 attempts + ~3s of backoff before surfacing the error, instead of failing instantly — an acceptable trade for resilience.
+- ⚠️ `bb put` still re-uploads already-sent files on a re-run (no `Exists` skip yet) — harmless overwrite; tracked as a follow-up.
