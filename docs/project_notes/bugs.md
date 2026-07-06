@@ -14,6 +14,12 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 
 ## Entries
 
+### 2026-07-06 - `bb buckets` 401 "authentication failed" — Account ID entered as keyID
+- **Issue**: After `bb init`, `bb buckets` (and any B2 op) failed with `authentication failed: status 401`. Config looked populated.
+- **Root Cause**: **User config error, not a code bug** — the stored **keyID was 12 hex chars** (`e02fd8314d56`), i.e. the Backblaze **Account ID**, not an applicationKey **keyID** (~25 chars). `b2_authorize_account` rejects the bad keyID+secret pair → 401, surfaced as `apperr.ErrAuthFailed`. (Two related config slips in the same session: **endpoint/region left blank** — harmless for `bb buckets`/native B2, breaks the default `s3` backend; and a **name/ID mismatch**, stored name `Scandiumsc` paired with `SC-OFFICE`'s bucket ID, from manually pasting an ID during a bad-cred init.)
+- **Solution**: Re-set credentials with `bb appkey <real-25-char-keyID>` (reads the secret no-echo from stdin — no full re-init). `bb bucket <name>` fixes the name/ID mismatch by auto-resolving a consistent pair (ADR-017).
+- **Prevention**: The **error type localized it**: `ErrAuthFailed` comes only from the `authorize` step (bad key pair), never from `b2_list_buckets` (a capability/permission problem would surface as `ErrListFailed: ... status 401`). Remember: **keyID ≠ Account ID ≠ keyName**; only keyID + applicationKey authenticate, and `keyName` is not stored by `bb`. Documented in key_facts.md "Credential gotcha".
+
 ### 2026-06-16 - Web UI CSRF on POST endpoints
 - **Issue**: The web UI's state-changing POST endpoints (`/upload`, `/delete`, `/close`) had no CSRF defense. A malicious web page the user visited could auto-submit a cross-site form to `http://127.0.0.1:9171/...` and drive the UI — including the **destructive local+remote delete** and stopping the server. Flagged HIGH by automated security review on the `feat/web-ui` merge.
 - **Root Cause**: The server relied on the `Host`-header guard, which stops DNS-rebinding but NOT a cross-site form POST — the browser sends those with the real `Host: 127.0.0.1:9171`. With no auth, the server trusted every localhost request. ADR-015 had even (wrongly) claimed the Host guard mitigated CSRF.

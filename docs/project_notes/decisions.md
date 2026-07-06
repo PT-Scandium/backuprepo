@@ -282,3 +282,26 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ `bb stop` is graceful on both OSes; interactive `bb appkey` no longer leaks the secret to screen/scrollback. `GOOS=windows` build + vet pass; Linux tests (incl. the existing `appkey` ones via the line-read fallback) green.
 - ✅ No new *module* for the Windows stop (`x/sys` already present); one small new module (`x/term`) for no-echo.
 - ❌ The graceful-stop and no-echo paths are exercised only on real Windows / real TTY respectively — unit tests cover the fallbacks; the cross-compile build is the gate for the Windows event code.
+
+### ADR-017: Bucket listing (`bb buckets`) + name→ID auto-resolution in `init`/`bucket` (2026-07-06)
+
+**Context:**
+- The config stores a **single active bucket** (name + ID). Users with several B2 buckets had no way to *see* them from `bb`, and switching required hand-copying the 24-hex bucket ID from the B2 console into `bb bucket <name> <id>` — error-prone and the source of a real name/ID mismatch (stored name `Scandiumsc` paired with `SC-OFFICE`'s ID). The S3 API can enumerate bucket *names* but not B2 bucket *IDs*, so it can't drive this.
+
+**Decision:**
+- **New `bb buckets` command** lists every bucket the credentials can see (NAME / ID / TYPE), marking the active one with `*`. It **always uses the native B2 API** (`b2_list_buckets`) regardless of the configured backend, because only that API returns bucket IDs — the whole point of the command.
+- **Kept off the `b2.Backend` interface.** Listing buckets is an *account-level* operation, not a per-bucket one, so it's a standalone `(*B2Backend).ListBuckets` + package-level `b2.ListBuckets(ctx, cfg)`; `FakeBackend`/`S3Backend` are untouched and the `Backend` interface stays clean. Added `b2.BucketInfo{Name,ID,Type}`.
+- **Captured `accountId` from `b2_authorize_account`** (previously decoded and discarded) into `b2Auth` — `b2_list_buckets` is account-scoped and requires it.
+- **Auto-resolve the bucket ID from its name** in both `bb init` and `bb bucket <name>` via a shared `cli.resolveBucketID`. A `cli.BucketLister` func type is injected into `Init`/`Bucket` (main.go wires `b2.ListBuckets`) so the lookup is stubbable in tests **without network access**. On success the ID is filled automatically (init skips its manual "Bucket ID" prompt); on failure or not-found it **falls back** to the prior behavior (init prompts; `bucket` clears the ID) with an explanatory message. An explicit `bb bucket <name> <id>` always wins — no lookup.
+
+**Alternatives Considered:**
+- Add `ListBuckets` to the `Backend` interface → Rejected: forces a meaningless method onto `S3Backend`/`FakeBackend`; account-level op doesn't belong on a per-bucket interface.
+- Use S3 `ListBuckets` when the S3 backend is active → Rejected: returns names only, no bucket IDs — useless for `bb bucket`/native upload.
+- Call `b2.ListBuckets` directly inside `Init` → Rejected: would fire a live HTTPS request to Backblaze during unit tests; the injected `BucketLister` seam keeps tests hermetic (mirrors the existing `b2.Backend`-injection pattern; no global state).
+- Hard-fail init when the bucket name isn't found → Rejected: a bucket-scoped key or transient outage shouldn't block setup; fall back to manual entry.
+
+**Consequences:**
+- ✅ Users can browse all buckets (`bb buckets`) and switch in one word (`bb bucket <name>`), with the ID resolved and kept consistent with the name — closing the mismatch failure mode.
+- ✅ `Backend` interface unchanged; `var _ Backend = (*B2Backend)(nil)` still holds. New tests: `TestB2ListBuckets`, `TestInitBucketIDFallback`, `TestBucketAutoResolvesID`; full suite + vet + gofmt green.
+- ⚠️ `bb buckets` and auto-resolve need a key with account-wide **`listBuckets`** capability; a **bucket-scoped** key sees only its own bucket (still enough to resolve *that* bucket's ID during init).
+- ⚠️ `bb bucket <name>` (no id) changed meaning: it now **auto-resolves** the ID rather than clearing it. It still clears on a failed/not-found lookup, so the old S3-only "clear the ID" path remains reachable when the name isn't in the account.

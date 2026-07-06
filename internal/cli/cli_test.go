@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"backuprepo/internal/apperr"
+	"backuprepo/internal/b2"
 	"backuprepo/internal/store"
 )
 
@@ -36,18 +37,30 @@ func newStore(t *testing.T) *store.Store {
 func TestInitThenConfigMasksSecret(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
+	// With a lister that finds "my-bucket", Init auto-resolves the bucket ID and
+	// does NOT prompt for it, so no bucket-ID line appears in the input.
+	lister := func(context.Context, b2.Config) ([]b2.BucketInfo, error) {
+		return []b2.BucketInfo{{Name: "my-bucket", ID: "auto-bid", Type: "allPrivate"}}, nil
+	}
 	in := strings.NewReader(strings.Join([]string{
 		"0001keyid",                              // keyID
 		"K001-this-is-secret",                    // appKey
-		"my-bucket",                              // bucket name
-		"buck-et-id-123",                         // bucket ID  (NEW)
+		"my-bucket",                              // bucket name (ID auto-resolved)
 		"https://s3.us-west-004.backblazeb2.com", // endpoint
 		"us-west-004",                            // region
 		"",                                       // first folder (skip)
 	}, "\n"))
 	var out bytes.Buffer
-	if err := Init(ctx, st, in, &out); err != nil {
+	if err := Init(ctx, st, in, &out, lister); err != nil {
 		t.Fatalf("Init: %v", err)
+	}
+
+	cfg, err := st.GetConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	if cfg.BucketID != "auto-bid" {
+		t.Fatalf("bucket ID not auto-resolved: got %q, want %q", cfg.BucketID, "auto-bid")
 	}
 
 	var cfgOut bytes.Buffer
@@ -60,6 +73,49 @@ func TestInitThenConfigMasksSecret(t *testing.T) {
 	}
 	if !strings.Contains(s, "my-bucket") {
 		t.Fatalf("config output missing bucket: %q", s)
+	}
+}
+
+// TestInitBucketIDFallback verifies that when auto-resolution fails (lister
+// errors) or the bucket isn't found, Init falls back to the manual ID prompt.
+func TestInitBucketIDFallback(t *testing.T) {
+	cases := []struct {
+		name   string
+		lister BucketLister
+	}{
+		{"lister errors", func(context.Context, b2.Config) ([]b2.BucketInfo, error) {
+			return nil, apperr.ErrAuthFailed
+		}},
+		{"bucket not found", func(context.Context, b2.Config) ([]b2.BucketInfo, error) {
+			return []b2.BucketInfo{{Name: "someone-elses-bucket", ID: "x"}}, nil
+		}},
+		{"nil lister", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(t)
+			ctx := context.Background()
+			in := strings.NewReader(strings.Join([]string{
+				"0001keyid",           // keyID
+				"K001-this-is-secret", // appKey
+				"my-bucket",           // bucket name
+				"manual-bid",          // bucket ID (prompted because auto-resolve failed)
+				"https://s3.example",  // endpoint
+				"us-west-004",         // region
+				"",                    // first folder (skip)
+			}, "\n"))
+			var out bytes.Buffer
+			if err := Init(ctx, st, in, &out, tc.lister); err != nil {
+				t.Fatalf("Init: %v", err)
+			}
+			cfg, err := st.GetConfig(ctx)
+			if err != nil {
+				t.Fatalf("GetConfig: %v", err)
+			}
+			if cfg.BucketID != "manual-bid" {
+				t.Fatalf("bucket ID = %q, want manual-bid (fallback prompt)", cfg.BucketID)
+			}
+		})
 	}
 }
 
@@ -122,7 +178,8 @@ func TestBucketSwitchKeepsCredentials(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := Bucket(ctx, st, "new-bucket", "new-id", &out); err != nil {
+	// Explicit id is used as-is; lister must not be consulted, so pass nil.
+	if err := Bucket(ctx, st, "new-bucket", "new-id", nil, &out); err != nil {
 		t.Fatalf("Bucket set: %v", err)
 	}
 	cfg, err := st.GetConfig(ctx)
@@ -139,7 +196,7 @@ func TestBucketSwitchKeepsCredentials(t *testing.T) {
 
 	// No-arg form shows the current bucket.
 	out.Reset()
-	if err := Bucket(ctx, st, "", "", &out); err != nil {
+	if err := Bucket(ctx, st, "", "", nil, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out.String(), "new-bucket") || !strings.Contains(out.String(), "new-id") {
@@ -150,10 +207,53 @@ func TestBucketSwitchKeepsCredentials(t *testing.T) {
 // TestBucketSetRequiresConfig verifies setting a bucket before config returns ErrNotConfigured.
 func TestBucketSetRequiresConfig(t *testing.T) {
 	st := newStore(t)
-	err := Bucket(context.Background(), st, "b", "i", &bytes.Buffer{})
+	err := Bucket(context.Background(), st, "b", "i", nil, &bytes.Buffer{})
 	if !errors.Is(err, apperr.ErrNotConfigured) {
 		t.Fatalf("want ErrNotConfigured, got %v", err)
 	}
+}
+
+// TestBucketAutoResolvesID verifies that switching by name only auto-resolves the
+// bucket ID from the account, and falls back to clearing it when not found.
+func TestBucketAutoResolvesID(t *testing.T) {
+	newCfg := func(t *testing.T) (*store.Store, context.Context) {
+		st := newStore(t)
+		ctx := context.Background()
+		if err := st.SaveConfig(ctx, store.RemoteConfig{
+			KeyID: "k", AppKey: "secret", Bucket: "old", BucketID: "old-id",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return st, ctx
+	}
+
+	t.Run("resolved", func(t *testing.T) {
+		st, ctx := newCfg(t)
+		lister := func(context.Context, b2.Config) ([]b2.BucketInfo, error) {
+			return []b2.BucketInfo{{Name: "new", ID: "resolved-id"}}, nil
+		}
+		if err := Bucket(ctx, st, "new", "", lister, &bytes.Buffer{}); err != nil {
+			t.Fatalf("Bucket: %v", err)
+		}
+		cfg, _ := st.GetConfig(ctx)
+		if cfg.Bucket != "new" || cfg.BucketID != "resolved-id" {
+			t.Fatalf("got %s / %s, want new / resolved-id", cfg.Bucket, cfg.BucketID)
+		}
+	})
+
+	t.Run("not found clears id", func(t *testing.T) {
+		st, ctx := newCfg(t)
+		lister := func(context.Context, b2.Config) ([]b2.BucketInfo, error) {
+			return []b2.BucketInfo{{Name: "someone-else", ID: "x"}}, nil
+		}
+		if err := Bucket(ctx, st, "new", "", lister, &bytes.Buffer{}); err != nil {
+			t.Fatalf("Bucket: %v", err)
+		}
+		cfg, _ := st.GetConfig(ctx)
+		if cfg.Bucket != "new" || cfg.BucketID != "" {
+			t.Fatalf("got %s / %q, want new / empty", cfg.Bucket, cfg.BucketID)
+		}
+	})
 }
 
 // TestSetAppKeyChangesSecretOnly verifies SetAppKey updates only the secret and never echoes it.

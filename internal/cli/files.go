@@ -240,6 +240,30 @@ func confirm(in io.Reader, out io.Writer, prompt string) bool {
 	return line == "y" || line == "yes"
 }
 
+// Buckets lists every bucket visible to the stored credentials, marking the one
+// currently selected in config with "*". It always queries the native B2 API
+// (via b2.ListBuckets) since only that API returns bucket IDs.
+func Buckets(ctx context.Context, cfg b2.Config, out io.Writer) error {
+	list, err := b2.ListBuckets(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	if len(list) == 0 {
+		fmt.Fprintln(out, "(no buckets)")
+		return nil
+	}
+	tw := tabwriter.NewWriter(out, 0, 2, 2, ' ', 0)
+	fmt.Fprintln(tw, "\tNAME\tID\tTYPE")
+	for _, bk := range list {
+		marker := " "
+		if bk.Name == cfg.BucketName {
+			marker = "*"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", marker, bk.Name, bk.ID, bk.Type)
+	}
+	return tw.Flush()
+}
+
 // Backend prints (no arg) or sets the stored backend mode.
 func Backend(ctx context.Context, st *store.Store, kind string, out io.Writer) error {
 	if kind == "" {

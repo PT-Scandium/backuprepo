@@ -26,6 +26,22 @@ type Listing struct {
 	Prefixes []string
 }
 
+// BucketInfo describes one bucket in the account. It is not part of the Backend
+// interface: listing buckets is an account-level operation supported only by the
+// native B2 API (the S3-compatible API cannot return bucket IDs).
+type BucketInfo struct {
+	Name string
+	ID   string
+	Type string // B2 bucket type, e.g. "allPrivate" or "allPublic"
+}
+
+// ListBuckets lists every bucket the credentials in cfg can see. It always uses
+// the native B2 API regardless of the configured backend, because enumerating
+// buckets and returning their IDs is a native-only capability.
+func ListBuckets(ctx context.Context, cfg Config) ([]BucketInfo, error) {
+	return newB2Backend(cfg).ListBuckets(ctx)
+}
+
 // Uploader is the narrow write view the backup flow depends on.
 type Uploader interface {
 	Upload(ctx context.Context, key string, r io.Reader, size int64) error

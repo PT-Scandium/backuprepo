@@ -28,12 +28,29 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		// v3 nests the storage-API endpoints under apiInfo.storageApi.
 		json.NewEncoder(w).Encode(map[string]any{
 			"authorizationToken": "test-token",
+			"accountId":          "acct-1",
 			"apiInfo": map[string]any{
 				"storageApi": map[string]any{
 					"apiUrl":              base,
 					"downloadUrl":         base,
 					"recommendedPartSize": 100000000,
 				},
+			},
+		})
+	})
+	mux.HandleFunc("/b2api/v3/b2_list_buckets", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			AccountID string `json:"accountId"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.AccountID == "" {
+			w.WriteHeader(400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"buckets": []map[string]any{
+				{"bucketName": "my-bucket", "bucketId": "bid", "bucketType": "allPrivate"},
+				{"bucketName": "other", "bucketId": "bid2", "bucketType": "allPublic"},
 			},
 		})
 	})
@@ -295,6 +312,26 @@ func TestB2ListNonRecursiveGroupsFolders(t *testing.T) {
 	}
 	if len(l.Prefixes) != 1 || l.Prefixes[0] != "photos/" {
 		t.Fatalf("prefixes = %+v, want [photos/]", l.Prefixes)
+	}
+}
+
+// TestB2ListBuckets verifies ListBuckets returns each bucket's name and ID.
+func TestB2ListBuckets(t *testing.T) {
+	srv := b2TestServer(t, map[string][]byte{})
+	b := testB2(t, srv)
+
+	list, err := b.ListBuckets(context.Background())
+	if err != nil {
+		t.Fatalf("ListBuckets: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("got %d buckets, want 2", len(list))
+	}
+	if list[0].Name != "my-bucket" || list[0].ID != "bid" || list[0].Type != "allPrivate" {
+		t.Fatalf("bucket[0] = %+v", list[0])
+	}
+	if list[1].Name != "other" || list[1].ID != "bid2" {
+		t.Fatalf("bucket[1] = %+v", list[1])
 	}
 }
 

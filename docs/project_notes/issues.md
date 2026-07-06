@@ -127,6 +127,16 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   - **`cmd/bump`** + Makefile targets `version`, `bump` (patch+carry), `bump-minor`, `bump-major`; `make build` echoes `v<VERSION>`.
 - **Notes**: Bump rewrites `VERSION`; rebuild bakes the new value in. Release = git tag `v<VERSION>`. See key_facts "Versioning". Carry verified end-to-end via the bump tool (1.0.20→1.1.0, 1.20.20→2.0.0).
 
+### 2026-07-06 - `bb buckets` + name→ID auto-resolution (init & bucket)
+- **Status**: Implemented in working tree; `go build`/`go vet`/`gofmt`/`go test ./...` all green. See ADR-017.
+- **Description**: Added the ability to list all account buckets and to switch/setup by name without hand-copying bucket IDs:
+  - **`bb buckets`** — lists every visible bucket (NAME / ID / TYPE, active marked `*`) via native `b2_list_buckets`; always uses the native B2 API even under the `s3` backend (only it returns bucket IDs). New `b2.BucketInfo`, package-level `b2.ListBuckets(ctx, cfg)`, `(*B2Backend).ListBuckets`; kept **off** the `b2.Backend` interface.
+  - Captured **`accountId`** from `b2_authorize_account` into `b2Auth` (was decoded then discarded) — required by `b2_list_buckets`.
+  - **Auto-resolve bucket ID** in `bb init` and `bb bucket <name>` via shared `cli.resolveBucketID`; a `cli.BucketLister` func is injected into `Init`/`Bucket` (main.go wires `b2.ListBuckets`) so it's testable without network. Success fills the ID (init skips its ID prompt); failure/not-found falls back (init prompts; `bucket` clears) with a message. Explicit `bb bucket <name> <id>` still wins.
+  - `main.go`: new `buckets` case + `b2ConfigFromStore` helper (refactored out of `buildBackend`); help text for `buckets` and the auto-resolving `bucket`.
+  - Tests: `TestB2ListBuckets` (+ mock `b2_list_buckets` endpoint), `TestInitBucketIDFallback` (error/not-found/nil-lister), `TestBucketAutoResolvesID` (resolved + clears).
+- **Notes**: Live-verified against the user's account (listed 7 buckets: CCTV-KK130, CCTV-KK520, Family-Funeral, Family-Wedding, Rent-Contract-MDTM, SC-OFFICE, Sc-Coding). Surfaced + explained a stored name/ID mismatch (`Scandiumsc` name paired with `SC-OFFICE`'s ID) that `bb bucket <name>` now prevents. **Not yet committed/branched** — changes sit in the working tree.
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).
