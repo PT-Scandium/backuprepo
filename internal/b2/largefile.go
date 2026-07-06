@@ -1,9 +1,7 @@
 package b2
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -38,7 +36,7 @@ func (b *B2Backend) uploadLarge(ctx context.Context, auth *b2Auth, key string, r
 		n, readErr := io.ReadFull(r, buf)
 		if n > 0 {
 			partNum++
-			sha, err := b.uploadPart(ctx, auth, start.FileID, partNum, buf[:n])
+			sha, err := b.uploadPart(ctx, start.FileID, partNum, buf[:n])
 			if err != nil {
 				return err
 			}
@@ -62,32 +60,31 @@ func (b *B2Backend) uploadLarge(ctx context.Context, auth *b2Auth, key string, r
 }
 
 // uploadPart uploads one part of a large file and returns its SHA-1 hash.
-func (b *B2Backend) uploadPart(ctx context.Context, auth *b2Auth, fileID string, num int, data []byte) (string, error) {
-	var up struct {
-		UploadURL          string `json:"uploadUrl"`
-		AuthorizationToken string `json:"authorizationToken"`
+// Transient failures are retried with a fresh part-upload URL (see
+// uploadWithRetry / b2MaxUploadAttempts).
+func (b *B2Backend) uploadPart(ctx context.Context, fileID string, num int, data []byte) (string, error) {
+	sha := hex.EncodeToString(sha1Sum(data))
+	getURL := func() (string, string, error) {
+		a, err := b.authorize(ctx)
+		if err != nil {
+			return "", "", err
+		}
+		var up struct {
+			UploadURL          string `json:"uploadUrl"`
+			AuthorizationToken string `json:"authorizationToken"`
+		}
+		if err := b.postJSON(ctx, a, "b2_get_upload_part_url",
+			map[string]string{"fileId": fileID}, &up); err != nil {
+			return "", "", err
+		}
+		return up.UploadURL, up.AuthorizationToken, nil
 	}
-	if err := b.postJSON(ctx, auth, "b2_get_upload_part_url",
-		map[string]string{"fileId": fileID}, &up); err != nil {
-		return "", fmt.Errorf("%w: get_upload_part_url: %v", apperr.ErrUploadFailed, err)
+	setHeaders := func(req *http.Request) {
+		req.Header.Set("X-Bz-Part-Number", strconv.Itoa(num))
+		req.Header.Set("X-Bz-Content-Sha1", sha)
 	}
-	sum := sha1.Sum(data)
-	sha := hex.EncodeToString(sum[:])
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, up.UploadURL, bytes.NewReader(data))
-	if err != nil {
-		return "", fmt.Errorf("%w: %v", apperr.ErrUploadFailed, err)
-	}
-	req.Header.Set("Authorization", up.AuthorizationToken)
-	req.Header.Set("X-Bz-Part-Number", strconv.Itoa(num))
-	req.Header.Set("X-Bz-Content-Sha1", sha)
-	req.Header.Set("Content-Length", strconv.Itoa(len(data)))
-	resp, err := b.http.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("%w: upload part %d: %v", apperr.ErrUploadFailed, num, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%w: upload part %d: status %d", apperr.ErrUploadFailed, num, resp.StatusCode)
+	if err := b.uploadWithRetry(ctx, fmt.Sprintf("upload part %d", num), getURL, setHeaders, data); err != nil {
+		return "", err
 	}
 	return sha, nil
 }

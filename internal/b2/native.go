@@ -123,8 +123,16 @@ func (b *B2Backend) postJSON(ctx context.Context, auth *b2Auth, endpoint string,
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+// b2MaxUploadAttempts bounds how many times an upload (or upload-part) POST is
+// retried, each with a freshly fetched upload URL, before giving up. B2 hands out
+// a per-pod upload URL, and an individual pod can be briefly unreachable (TCP
+// connection refused/reset/timeout) or return 5xx; the documented remedy is to
+// request a NEW upload URL — usually a different, healthy pod — and retry.
+const b2MaxUploadAttempts = 5
+
 // Upload stores key. Small files go through b2_upload_file; larger files use the
-// large-file API (see largefile.go).
+// large-file API (see largefile.go). Transient upload failures are retried with a
+// fresh upload URL (see b2MaxUploadAttempts).
 func (b *B2Backend) Upload(ctx context.Context, key string, r io.Reader, size int64) error {
 	auth, err := b.authorize(ctx)
 	if err != nil {
@@ -137,35 +145,119 @@ func (b *B2Backend) Upload(ctx context.Context, key string, r io.Reader, size in
 	if err != nil {
 		return fmt.Errorf("%w: read %s: %v", apperr.ErrUploadFailed, key, err)
 	}
+	sha := hex.EncodeToString(sha1Sum(data))
 
-	var up struct {
-		UploadURL          string `json:"uploadUrl"`
-		AuthorizationToken string `json:"authorizationToken"`
+	getURL := func() (string, string, error) {
+		a, err := b.authorize(ctx)
+		if err != nil {
+			return "", "", err
+		}
+		var up struct {
+			UploadURL          string `json:"uploadUrl"`
+			AuthorizationToken string `json:"authorizationToken"`
+		}
+		if err := b.postJSON(ctx, a, "b2_get_upload_url",
+			map[string]string{"bucketId": b.cfg.BucketID}, &up); err != nil {
+			return "", "", err
+		}
+		return up.UploadURL, up.AuthorizationToken, nil
 	}
-	if err := b.postJSON(ctx, auth, "b2_get_upload_url",
-		map[string]string{"bucketId": b.cfg.BucketID}, &up); err != nil {
-		return fmt.Errorf("%w: get_upload_url: %v", apperr.ErrUploadFailed, err)
+	setHeaders := func(req *http.Request) {
+		req.Header.Set("X-Bz-File-Name", encodeFileName(key))
+		req.Header.Set("Content-Type", "b2/x-auto")
+		req.Header.Set("X-Bz-Content-Sha1", sha)
 	}
+	return b.uploadWithRetry(ctx, "upload "+key, getURL, setHeaders, data)
+}
 
+// uploadWithRetry POSTs data to a B2 upload URL, retrying up to
+// b2MaxUploadAttempts times on transient failures. getURL is called before every
+// attempt to fetch a fresh upload URL + token (so a retry lands on a new pod);
+// setHeaders stamps the endpoint-specific headers (Authorization and
+// Content-Length are set here). desc labels the operation in errors.
+func (b *B2Backend) uploadWithRetry(ctx context.Context, desc string,
+	getURL func() (url, token string, err error), setHeaders func(*http.Request), data []byte) error {
+
+	var lastErr error
+	for attempt := 1; attempt <= b2MaxUploadAttempts; attempt++ {
+		if attempt > 1 {
+			if err := b2Backoff(ctx, attempt); err != nil {
+				return err
+			}
+		}
+		url, token, err := getURL()
+		if err != nil {
+			lastErr = err // fetching a URL can itself fail transiently; retry
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("%w: %s: %v", apperr.ErrUploadFailed, desc, err)
+		}
+		req.Header.Set("Authorization", token)
+		req.Header.Set("Content-Length", strconv.Itoa(len(data)))
+		setHeaders(req)
+
+		resp, err := b.http.Do(req)
+		if err != nil {
+			lastErr = err // connection refused/reset/timeout → retry with a new URL
+			continue
+		}
+		code := resp.StatusCode
+		resp.Body.Close()
+		if code == http.StatusOK {
+			return nil
+		}
+		lastErr = fmt.Errorf("status %d", code)
+		if code == http.StatusUnauthorized {
+			b.auth = nil // upload token expired → force re-authorize on the next getURL
+		}
+		if !b2RetryableStatus(code) {
+			return fmt.Errorf("%w: %s: status %d", apperr.ErrUploadFailed, desc, code)
+		}
+	}
+	return fmt.Errorf("%w: %s: giving up after %d attempts: %v",
+		apperr.ErrUploadFailed, desc, b2MaxUploadAttempts, lastErr)
+}
+
+// b2RetryableStatus reports whether an HTTP status from a B2 upload warrants a
+// retry with a fresh upload URL (transient/server-side or an expired token).
+func b2RetryableStatus(code int) bool {
+	switch code {
+	case http.StatusUnauthorized, // 401 — expired upload/auth token
+		http.StatusRequestTimeout,      // 408
+		http.StatusTooManyRequests,     // 429
+		http.StatusInternalServerError, // 500
+		http.StatusBadGateway,          // 502
+		http.StatusServiceUnavailable,  // 503
+		http.StatusGatewayTimeout:      // 504
+		return true
+	}
+	return false
+}
+
+// b2Backoff waits before retry `attempt` (2..N): 200ms, 400ms, 800ms, … capped
+// at 3s, aborting early if ctx is cancelled.
+func b2Backoff(ctx context.Context, attempt int) error {
+	d := 200 * time.Millisecond * time.Duration(1<<(attempt-2))
+	if d > 3*time.Second {
+		d = 3 * time.Second
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+// sha1Sum returns the SHA-1 of data as a byte slice (small helper so callers can
+// hex-encode without juggling the array type).
+func sha1Sum(data []byte) []byte {
 	sum := sha1.Sum(data)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, up.UploadURL, bytes.NewReader(data))
-	if err != nil {
-		return fmt.Errorf("%w: %v", apperr.ErrUploadFailed, err)
-	}
-	req.Header.Set("Authorization", up.AuthorizationToken)
-	req.Header.Set("X-Bz-File-Name", encodeFileName(key))
-	req.Header.Set("Content-Type", "b2/x-auto")
-	req.Header.Set("X-Bz-Content-Sha1", hex.EncodeToString(sum[:]))
-	req.Header.Set("Content-Length", strconv.Itoa(len(data)))
-	resp, err := b.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("%w: upload %s: %v", apperr.ErrUploadFailed, key, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: upload %s: status %d", apperr.ErrUploadFailed, key, resp.StatusCode)
-	}
-	return nil
+	return sum[:]
 }
 
 // Download streams key by name from the download URL.
