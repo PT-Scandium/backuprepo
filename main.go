@@ -124,19 +124,20 @@ func run(args []string) int {
 	case "put":
 		fs := flag.NewFlagSet("put", flag.ContinueOnError)
 		recursive := fs.Bool("r", false, "recursive")
+		skipExisting := fs.Bool("skip-existing", false, "skip files already present remotely (resume an interrupted upload)")
 		backend := fs.String("backend", "", "override backend (s3|b2)")
 		pos, e := parseFlags(fs, rest)
 		if e != nil {
 			return 1
 		}
 		if len(pos) < 1 {
-			return fail(fmt.Errorf("usage: bb put <local> [remote] [-r]"))
+			return fail(fmt.Errorf("usage: bb put <local> [remote] [-r] [--skip-existing]"))
 		}
 		be, e := buildBackend(ctx, st, *backend)
 		if e != nil {
 			return fail(e)
 		}
-		err = cli.Put(ctx, be, argAt(pos, 0), argAt(pos, 1), *recursive, os.Stdout)
+		err = cli.Put(ctx, be, argAt(pos, 0), argAt(pos, 1), *recursive, *skipExisting, os.Stdout)
 	case "rm":
 		fs := flag.NewFlagSet("rm", flag.ContinueOnError)
 		recursive := fs.Bool("r", false, "recursive")
@@ -334,7 +335,8 @@ STORAGE BACKEND  (mode — applies to upload and all file operations)
 MANUAL FILE OPERATIONS  (act directly on the bucket)
   ls [path] [-r]             List bucket contents (folders shown with trailing /)
   get <remote> [local] [-r]  Download an object, or a folder with -r
-  put <local> [remote] [-r]  Upload a file, or a directory with -r
+  put <local> [remote] [-r]  Upload a file, or a directory with -r (a failed file is reported but
+                               doesn't abort the batch); --skip-existing skips files already uploaded
   rm <path> [-r] [-f]        Delete an object/folder (confirms unless -f/-y)
   find <query> [prefix]      Case-insensitive substring search of object names
 

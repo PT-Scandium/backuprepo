@@ -140,8 +140,13 @@ func downloadTo(ctx context.Context, be b2.Backend, key, dest string) error {
 	return err
 }
 
-// Put uploads a single file, or (with recursive) every file under a local directory.
-func Put(ctx context.Context, be b2.Backend, local, remote string, recursive bool, out io.Writer) error {
+// Put uploads a single file, or (with recursive) every file under a local
+// directory. In recursive mode a failed file does NOT abort the batch: it is
+// reported, counted, and the walk continues, ending with a summary and a
+// non-zero result if any file failed. When skipExisting is set, files whose
+// remote object already exists are skipped (by presence only — this does not
+// detect locally-changed files; use it to resume an interrupted upload).
+func Put(ctx context.Context, be b2.Backend, local, remote string, recursive, skipExisting bool, out io.Writer) error {
 	info, err := os.Stat(local)
 	if err != nil {
 		return err
@@ -154,22 +159,47 @@ func Put(ctx context.Context, be b2.Backend, local, remote string, recursive boo
 		if prefix != "" && !strings.HasSuffix(prefix, "/") {
 			prefix += "/"
 		}
-		return filepath.WalkDir(local, func(p string, d os.DirEntry, err error) error {
+		var uploaded, skipped, failed int
+		walkErr := filepath.WalkDir(local, func(p string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
-				return err
+				return err // a filesystem walk error aborts; nil for directories
 			}
 			rel, _ := filepath.Rel(local, p)
 			key := prefix + filepath.ToSlash(rel)
-			if err := uploadFrom(ctx, be, p, key); err != nil {
-				return err
+			if skipExisting {
+				if ok, e := be.Exists(ctx, key); e == nil && ok {
+					skipped++
+					fmt.Fprintf(out, "skipped (exists) %s\n", key)
+					return nil
+				}
 			}
+			if err := uploadFrom(ctx, be, p, key); err != nil {
+				failed++
+				fmt.Fprintf(out, "FAILED %s: %v\n", key, err)
+				return nil // keep going — don't abandon the rest of the batch
+			}
+			uploaded++
 			fmt.Fprintf(out, "uploaded %s\n", key)
 			return nil
 		})
+		if walkErr != nil {
+			return walkErr
+		}
+		fmt.Fprintf(out, "Uploaded: %d, Skipped: %d, Failed: %d\n", uploaded, skipped, failed)
+		if failed > 0 {
+			return fmt.Errorf("%w: %d file(s) failed to upload", apperr.ErrUploadFailed, failed)
+		}
+		return nil
 	}
 	key := remoteKey(remote)
 	if key == "" {
 		key = filepath.Base(local)
+	}
+	if skipExisting {
+		if ok, e := be.Exists(ctx, key); e == nil && ok {
+			fmt.Fprintf(out, "skipped (exists) %s\n", key)
+			return nil
+		}
 	}
 	if err := uploadFrom(ctx, be, local, key); err != nil {
 		return err
