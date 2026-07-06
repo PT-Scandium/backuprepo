@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"backuprepo/internal/apperr"
@@ -312,6 +313,93 @@ func TestB2ListNonRecursiveGroupsFolders(t *testing.T) {
 	}
 	if len(l.Prefixes) != 1 || l.Prefixes[0] != "photos/" {
 		t.Fatalf("prefixes = %+v, want [photos/]", l.Prefixes)
+	}
+}
+
+// flakyUploadServer simulates B2 auth + get_upload_url + an upload endpoint that
+// returns `failStatus` for its first `failN` POSTs, then succeeds. It reports how
+// many upload attempts it saw. Used to exercise the upload retry loop.
+func flakyUploadServer(t *testing.T, store map[string][]byte, failN int, failStatus int, hits *int32) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	var base string
+	mux.HandleFunc("/b2api/v3/b2_authorize_account", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"authorizationToken": "t", "accountId": "acct",
+			"apiInfo": map[string]any{"storageApi": map[string]any{
+				"apiUrl": base, "downloadUrl": base, "recommendedPartSize": 100000000}},
+		})
+	})
+	mux.HandleFunc("/b2api/v3/b2_get_upload_url", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"uploadUrl": base + "/upload", "authorizationToken": "u"})
+	})
+	mux.HandleFunc("/upload", func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(hits, 1)
+		if int(n) <= failN {
+			w.WriteHeader(failStatus)
+			return
+		}
+		name := r.Header.Get("X-Bz-File-Name")
+		body, _ := io.ReadAll(r.Body)
+		store[name] = body
+		json.NewEncoder(w).Encode(map[string]any{"fileName": name, "fileId": "id-" + name})
+	})
+	srv := httptest.NewServer(mux)
+	base = srv.URL
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestB2UploadRetriesTransient verifies a small-file upload retries past transient
+// 503s (a new upload URL each attempt) and ultimately succeeds.
+func TestB2UploadRetriesTransient(t *testing.T) {
+	store := map[string][]byte{}
+	var hits int32
+	srv := flakyUploadServer(t, store, 2, http.StatusServiceUnavailable, &hits)
+	b := testB2(t, srv)
+
+	if err := b.Upload(context.Background(), "f.txt", bytes.NewReader([]byte("hi")), 2); err != nil {
+		t.Fatalf("Upload should retry past 503s: %v", err)
+	}
+	if string(store["f.txt"]) != "hi" {
+		t.Fatalf("server stored %q, want \"hi\"", store["f.txt"])
+	}
+	if got := atomic.LoadInt32(&hits); got != 3 {
+		t.Fatalf("upload attempts = %d, want 3 (2 failed + 1 success)", got)
+	}
+}
+
+// TestB2UploadFailsFastOnNonRetryable verifies a non-retryable status (400) is
+// NOT retried — one attempt, immediate error.
+func TestB2UploadFailsFastOnNonRetryable(t *testing.T) {
+	store := map[string][]byte{}
+	var hits int32
+	srv := flakyUploadServer(t, store, 99, http.StatusBadRequest, &hits) // always 400
+	b := testB2(t, srv)
+
+	err := b.Upload(context.Background(), "f.txt", bytes.NewReader([]byte("hi")), 2)
+	if !errors.Is(err, apperr.ErrUploadFailed) {
+		t.Fatalf("want ErrUploadFailed, got %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); got != 1 {
+		t.Fatalf("upload attempts = %d, want 1 (400 is not retryable)", got)
+	}
+}
+
+// TestB2UploadGivesUpAfterMaxAttempts verifies persistent transient failures stop
+// after b2MaxUploadAttempts and return an error.
+func TestB2UploadGivesUpAfterMaxAttempts(t *testing.T) {
+	store := map[string][]byte{}
+	var hits int32
+	srv := flakyUploadServer(t, store, 99, http.StatusServiceUnavailable, &hits) // always 503
+	b := testB2(t, srv)
+
+	err := b.Upload(context.Background(), "f.txt", bytes.NewReader([]byte("hi")), 2)
+	if !errors.Is(err, apperr.ErrUploadFailed) {
+		t.Fatalf("want ErrUploadFailed after exhausting retries, got %v", err)
+	}
+	if got := atomic.LoadInt32(&hits); int(got) != b2MaxUploadAttempts {
+		t.Fatalf("upload attempts = %d, want %d", got, b2MaxUploadAttempts)
 	}
 }
 
