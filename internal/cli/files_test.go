@@ -73,11 +73,74 @@ func TestPutUploadsFile(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "local.txt")
 	os.WriteFile(src, []byte("hello"), 0o644)
 	var out bytes.Buffer
-	if err := Put(ctx, be, src, "remote/local.txt", false, &out); err != nil {
+	if err := Put(ctx, be, src, "remote/local.txt", false, false, &out); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	if string(be.Objects["remote/local.txt"]) != "hello" {
 		t.Fatalf("uploaded = %q", be.Objects["remote/local.txt"])
+	}
+}
+
+// TestPutRecursiveContinuesPastFailure verifies that in recursive mode one failed
+// file is reported and counted but the rest still upload, and Put returns an error.
+func TestPutRecursiveContinuesPastFailure(t *testing.T) {
+	ctx := context.Background()
+	be := b2.NewFake()
+	dir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Make the middle file fail to upload.
+	be.FailUpload = func(key string) error {
+		if strings.HasSuffix(key, "b.txt") {
+			return apperr.ErrUploadFailed
+		}
+		return nil
+	}
+	var out bytes.Buffer
+	err := Put(ctx, be, dir, "dest", true, false, &out)
+	if !errors.Is(err, apperr.ErrUploadFailed) {
+		t.Fatalf("want ErrUploadFailed (1 file failed), got %v", err)
+	}
+	// The other two files uploaded despite b.txt failing.
+	if string(be.Objects["dest/a.txt"]) != "a.txt" || string(be.Objects["dest/c.txt"]) != "c.txt" {
+		t.Fatalf("a and c should have uploaded; objects=%v", be.Objects)
+	}
+	if _, ok := be.Objects["dest/b.txt"]; ok {
+		t.Fatal("b.txt should not have been stored")
+	}
+	s := out.String()
+	if !strings.Contains(s, "FAILED dest/b.txt") || !strings.Contains(s, "Uploaded: 2, Skipped: 0, Failed: 1") {
+		t.Fatalf("summary/report missing: %q", s)
+	}
+}
+
+// TestPutRecursiveSkipExisting verifies --skip-existing skips files already
+// present remotely and uploads only the new ones.
+func TestPutRecursiveSkipExisting(t *testing.T) {
+	ctx := context.Background()
+	be := b2.NewFake()
+	be.Objects["dest/a.txt"] = []byte("old") // pretend a.txt is already uploaded
+	dir := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("new-"+name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	if err := Put(ctx, be, dir, "dest", true, true, &out); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if string(be.Objects["dest/a.txt"]) != "old" {
+		t.Fatalf("a.txt should have been skipped (still %q), got %q", "old", be.Objects["dest/a.txt"])
+	}
+	if string(be.Objects["dest/b.txt"]) != "new-b.txt" {
+		t.Fatalf("b.txt should have uploaded, got %q", be.Objects["dest/b.txt"])
+	}
+	if !strings.Contains(out.String(), "Uploaded: 1, Skipped: 1, Failed: 0") {
+		t.Fatalf("summary missing: %q", out.String())
 	}
 }
 
@@ -195,7 +258,7 @@ func TestPutDirWithoutRecursiveErrors(t *testing.T) {
 	be := b2.NewFake()
 	tmpDir := t.TempDir()
 	var out bytes.Buffer
-	err := Put(ctx, be, tmpDir, "remote", false, &out)
+	err := Put(ctx, be, tmpDir, "remote", false, false, &out)
 	if err == nil {
 		t.Fatal("expected error when putting directory without -r, got nil")
 	}

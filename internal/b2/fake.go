@@ -14,6 +14,9 @@ import (
 // FakeBackend is an in-memory Backend for tests.
 type FakeBackend struct {
 	Objects map[string][]byte
+	// FailUpload, if set, is consulted before each Upload; a non-nil return makes
+	// that key's upload fail (used to exercise error handling).
+	FailUpload func(key string) error
 }
 
 // NewFake returns an empty in-memory backend.
@@ -23,6 +26,11 @@ func NewFake() *FakeBackend {
 
 // Upload reads r fully and stores the bytes in memory under key.
 func (f *FakeBackend) Upload(ctx context.Context, key string, r io.Reader, size int64) error {
+	if f.FailUpload != nil {
+		if err := f.FailUpload(key); err != nil {
+			return err
+		}
+	}
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return err
