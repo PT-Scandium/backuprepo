@@ -328,3 +328,23 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ Deterministic tests via a flaky-upload httptest server: retries-then-succeeds, fails-fast on 400, gives-up after 5. Full suite + vet + gofmt green; shipped as **v1.0.2**.
 - ⚠️ A hard-down account (every pod failing) now takes up to 5 attempts + ~3s of backoff before surfacing the error, instead of failing instantly — an acceptable trade for resilience.
 - ⚠️ `bb put` still re-uploads already-sent files on a re-run (no `Exists` skip yet) — harmless overwrite; tracked as a follow-up.
+
+### ADR-019: Resilient `put -r` — continue past failures + opt-in `--skip-existing` (2026-07-06)
+
+**Context:**
+- `cli.Put`'s recursive walk returned the first per-file upload error straight out of the `WalkDir` callback, **aborting the whole batch** — one bad/failed file left the rest un-uploaded (surfaced live during a large `bb put -r`). ADR-018's retry fixed *transient* pod failures, but a genuinely bad file (permissions, vanished mid-walk, non-retryable status) still stranded the batch. Re-running also re-uploaded everything, since `bb put` has no change tracking (unlike `bb upload`, which diffs against stored file metadata).
+
+**Decision:**
+- **Continue-past-failures is the default for `-r`.** An upload failure is reported (`FAILED <key>: <err>`), counted, and the callback returns `nil` so the walk continues; the run ends with an `Uploaded: X, Skipped: Y, Failed: Z` summary and returns `ErrUploadFailed` (non-zero exit) if any failed. A **filesystem** walk error (the callback's `err` param) still aborts — that's an environment problem, not a per-file one.
+- **`--skip-existing` (opt-in)** skips files whose remote object already exists via `be.Exists`. **Presence-only** — it does NOT detect locally-edited files — so it's opt-in and the default stays overwrite; its purpose is cheaply **resuming an interrupted upload**. Applies to both the single-file and recursive paths.
+- `FakeBackend` gained a `FailUpload func(key) error` hook so per-file failure is testable in-memory.
+
+**Alternatives Considered:**
+- Make `--skip-existing` the default → Rejected: presence-only skipping would silently not re-upload a changed file, giving false "backed up" confidence. Safe default = always overwrite.
+- Content-aware skip (size/mtime/sha) for `put` → Deferred: that's what `bb upload` + the `files` table already do; `put` is the stateless manual primitive. Revisit only if a stateful manual sync is wanted.
+- Abort on first failure but add `--keep-going` → Rejected: with retry (ADR-018) already absorbing transient blips, a surviving failure is genuinely bad and abandoning the batch is the surprising choice; continue-by-default + non-zero exit is better.
+
+**Consequences:**
+- ✅ One bad file no longer strands a `put -r` batch; `--skip-existing` makes re-runs cheap (skip the already-sent). Mirrors `bb upload`'s Uploaded/Skipped/Failed summary style.
+- ✅ Tests: `TestPutRecursiveContinuesPastFailure` (2 uploaded, 1 FAILED, error returned), `TestPutRecursiveSkipExisting` (1 skipped, 1 uploaded). Full suite + vet + gofmt green; shipped as **v1.0.3**.
+- ⚠️ `put -r` now exits non-zero when *any* file failed even though others succeeded — callers/scripts should read the summary, not just the exit code, to know what got through.

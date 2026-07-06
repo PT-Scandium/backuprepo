@@ -70,7 +70,7 @@ Partial reconfig without a full `init` (all require existing config):
 Available once configured; all accept `--backend s3|b2`:
 - `ls [path] [-r]` — list objects; non-recursive groups folders as prefixes
 - `get <remote> [local] [-r]` — download object(s); `-r` downloads all under a prefix
-- `put <local> [remote] [-r]` — upload file(s); `-r` uploads a directory tree
+- `put <local> [remote] [-r] [--skip-existing]` — upload file(s); `-r` uploads a directory tree. In `-r`, a failed file is reported + counted but does NOT abort the batch (summary `Uploaded/Skipped/Failed`, non-zero exit if any failed). `--skip-existing` skips files already present remotely (presence-only; for resuming). See ADR-019.
 - `rm <path> [-r] [-f|-y]` — delete object(s); confirms unless `-f`/`-y`; `-r` deletes prefix
 - `find <query> [prefix]` — case-insensitive substring search of object keys
 - `backend [s3|b2]` — show or set the stored backend

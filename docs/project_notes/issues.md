@@ -145,6 +145,11 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 ### 2026-07-06 - Release ops: v1.0.1 + v1.0.2 published
 - **Status**: Done. `v1.0.1` (bb buckets + auto-resolve) and `v1.0.2` (upload retry) both tagged, released on GitHub with `bb-vX-linux-amd64` + `bb-vX-windows-amd64.exe` + `SHA256SUMS` (cross-compiled `CGO_ENABLED=0 -trimpath -ldflags="-s -w"`), README download links bumped each time. Release flow: branch → commit → `merge --no-ff` → annotated tag → push master + tag → build binaries → `gh release create`.
 
+### 2026-07-06 - Resilient `put -r` (v1.0.3)
+- **Status**: Done — merged to `master` (`9637a0e`), tagged **v1.0.3**, GitHub release published (linux/windows binaries + SHA256SUMS), README bumped. `go test ./...`/vet/gofmt green. See ADR-019.
+- **Description**: `bb put -r` no longer aborts the whole walk on the first per-file failure — it reports `FAILED <key>: <err>`, counts it, continues, and ends with an `Uploaded/Skipped/Failed` summary (returns `ErrUploadFailed` / non-zero exit if any failed); filesystem walk errors still abort. Added opt-in `--skip-existing` (skips files already present remotely, presence-only, for resuming an interrupted upload). `FakeBackend` gained a `FailUpload` hook; tests `TestPutRecursiveContinuesPastFailure`, `TestPutRecursiveSkipExisting`.
+- **Notes**: Closes the "put -r batch resilience" follow-up logged under v1.0.2. Complements ADR-018 retry (transient vs genuine per-file failures).
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).
@@ -153,4 +158,4 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 - ~~**Windows daemon backend**~~ — DONE 2026-06-16 (branch `feat/windows-daemon`; see work log + ADR-014): build-tagged `signals_{unix,windows}.go`; fsnotify already provided `ReadDirectoryChangesW`, so only signals/process control needed splitting. Windows `stop` is forceful.
 - ~~**Deletion propagation**~~ — DONE 2026-06-16 (working tree; see work log + ADR-013): opt-in `--delete` on `upload`/`start`, with an unmounted-folder safety guard.
 - **Minor follow-ups from final review** — `b2.Uploader.Exists` and the `size` param are unused forward-looking hooks; a couple of cosmetic nits (`copyInto` wrapper, `usage(*os.File)` vs `io.Writer`).
-- **`put -r` batch resilience** (2026-07-06) — `cli.Put` still aborts the whole walk on the first per-file error, and re-uploads already-sent files (no `Exists` skip). ADR-018's upload retry handles *transient* failures; making the batch continue-past-failures (report a summary like `bb upload`) + skip unchanged files would make one genuinely-bad file non-fatal and re-runs cheap. `b2.Uploader.Exists` already exists to support the skip.
+- ~~**`put -r` batch resilience**~~ — DONE 2026-07-06 (v1.0.3, ADR-019): continue-past-failures + `Uploaded/Skipped/Failed` summary + opt-in `--skip-existing`. Note: `--skip-existing` is presence-only (no content diff); a stateful/content-aware manual sync remains unbuilt (use `bb upload` for change-tracked backups).
