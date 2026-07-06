@@ -21,8 +21,16 @@ import (
 	"backuprepo/internal/store"
 )
 
-// Init runs interactive setup, reading answers from in and writing prompts to out.
-func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer) error {
+// BucketLister looks up the account's buckets from credentials. It matches
+// b2.ListBuckets and is passed into Init so setup can auto-resolve the bucket ID
+// (and so tests can stub the lookup without network access). A nil lister
+// disables auto-resolution, leaving the manual bucket-ID prompt.
+type BucketLister func(ctx context.Context, cfg b2.Config) ([]b2.BucketInfo, error)
+
+// Init runs interactive setup, reading answers from in and writing prompts to
+// out. lister is used to auto-resolve the bucket ID from its name; main.go wires
+// b2.ListBuckets.
+func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer, lister BucketLister) error {
 	r := bufio.NewReader(in)
 	ask := func(label string) string {
 		fmt.Fprintf(out, "%s: ", label)
@@ -31,16 +39,22 @@ func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer) err
 	}
 
 	cfg := store.RemoteConfig{
-		KeyID:    ask("Backblaze keyID (access key ID)"),
-		AppKey:   ask("Backblaze applicationKey (secret)"),
-		Bucket:   ask("Bucket name"),
-		BucketID: ask("Bucket ID (for native B2 API)"),
-		Endpoint: ask("S3 endpoint URL (e.g. https://s3.us-west-004.backblazeb2.com)"),
-		Region:   ask("S3 region (e.g. us-west-004)"),
+		KeyID:  ask("Backblaze keyID (access key ID)"),
+		AppKey: ask("Backblaze applicationKey (secret)"),
+		Bucket: ask("Bucket name"),
 	}
 	if cfg.KeyID == "" || cfg.AppKey == "" || cfg.Bucket == "" {
 		return fmt.Errorf("%w: keyID, applicationKey and bucket are required", apperr.ErrInvalidCredentials)
 	}
+	// Try to resolve the bucket ID automatically so the user needn't hunt for it;
+	// fall back to a manual prompt if the lookup fails or the bucket isn't found.
+	cfg.BucketID = resolveBucketID(ctx, lister, cfg.KeyID, cfg.AppKey, cfg.Bucket, out)
+	if cfg.BucketID == "" {
+		cfg.BucketID = ask("Bucket ID (for native B2 API)")
+	}
+	cfg.Endpoint = ask("S3 endpoint URL (e.g. https://s3.us-west-004.backblazeb2.com)")
+	cfg.Region = ask("S3 region (e.g. us-west-004)")
+
 	if err := st.SaveConfig(ctx, cfg); err != nil {
 		return err
 	}
@@ -53,6 +67,29 @@ func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer) err
 		}
 	}
 	return nil
+}
+
+// resolveBucketID looks the bucket up by name via the native B2 API and returns
+// its ID so Init can skip the manual "Bucket ID" prompt. It returns "" (and
+// explains why on out) when auto-resolution is unavailable, the lookup fails, or
+// the named bucket isn't visible to the credentials — the caller then asks.
+func resolveBucketID(ctx context.Context, lister BucketLister, keyID, appKey, bucket string, out io.Writer) string {
+	if lister == nil {
+		return ""
+	}
+	list, err := lister(ctx, b2.Config{KeyID: keyID, AppKey: appKey})
+	if err != nil {
+		fmt.Fprintf(out, "Could not auto-resolve bucket ID (%v); enter it manually.\n", err)
+		return ""
+	}
+	for _, bk := range list {
+		if bk.Name == bucket {
+			fmt.Fprintf(out, "Resolved bucket ID for %q: %s\n", bucket, bk.ID)
+			return bk.ID
+		}
+	}
+	fmt.Fprintf(out, "Bucket %q not found among %d visible bucket(s); enter its ID manually.\n", bucket, len(list))
+	return ""
 }
 
 // Watch adds an existing directory to the watch list.
@@ -165,8 +202,11 @@ func Config(ctx context.Context, st *store.Store, out io.Writer) error {
 
 // Bucket shows the current bucket (no name) or switches to another bucket,
 // changing only the bucket name + ID and leaving credentials, endpoint, region,
-// and backend untouched. An empty id clears the stored bucket ID (S3-only).
-func Bucket(ctx context.Context, st *store.Store, name, id string, out io.Writer) error {
+// and backend untouched. When a name is given without an explicit id, the id is
+// auto-resolved from the account via lister (the same lookup init uses); if that
+// lookup fails or the bucket isn't found, the stored bucket ID is cleared
+// (S3-only). An explicit id is always used as-is.
+func Bucket(ctx context.Context, st *store.Store, name, id string, lister BucketLister, out io.Writer) error {
 	if name == "" {
 		cfg, err := st.GetConfig(ctx)
 		if err != nil {
@@ -174,6 +214,13 @@ func Bucket(ctx context.Context, st *store.Store, name, id string, out io.Writer
 		}
 		fmt.Fprintf(out, "Bucket:    %s\nBucket ID: %s\n", cfg.Bucket, cfg.BucketID)
 		return nil
+	}
+	if id == "" {
+		cfg, err := st.GetConfig(ctx)
+		if err != nil {
+			return err
+		}
+		id = resolveBucketID(ctx, lister, cfg.KeyID, cfg.AppKey, name, out)
 	}
 	if err := st.SetBucket(ctx, name, id); err != nil {
 		return err

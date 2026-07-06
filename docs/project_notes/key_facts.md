@@ -40,7 +40,8 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
 ### Storage backends
 
 - **`s3`** (default) — S3-compatible Backblaze B2 endpoint via `aws-sdk-go-v2`; addresses bucket by **name**.
-- **`b2`** — Native Backblaze B2 **v3 API** (`/b2api/v3/...`) over stdlib `net/http`; addresses bucket by **ID** for list/upload, by **name** for download. The `b2_authorize_account` response nests `apiUrl`/`downloadUrl`/`recommendedPartSize` under `apiInfo.storageApi` (v3 shape). API version lives in `b2APIVersion` in `native.go`.
+- **`b2`** — Native Backblaze B2 **v3 API** (`/b2api/v3/...`) over stdlib `net/http`; addresses bucket by **ID** for list/upload, by **name** for download. The `b2_authorize_account` response nests `apiUrl`/`downloadUrl`/`recommendedPartSize` under `apiInfo.storageApi` (v3 shape); its top-level `accountId` is captured into `b2Auth` for account-scoped calls (`b2_list_buckets`). API version lives in `b2APIVersion` in `native.go`.
+- **Account-level (native only):** `b2.ListBuckets(ctx, cfg)` / `(*B2Backend).ListBuckets` list all buckets (name + ID + type). Deliberately **not** on the `b2.Backend` interface (per-bucket ops only); backs `bb buckets` and the `init`/`bucket` ID auto-resolution. See ADR-017.
 - Stored in `backend TEXT` column of `config` table; `NULL`/empty defaults to `"s3"`.
 - Switch with `bb backend [s3|b2]`; override per-command with `--backend s3|b2`.
 
@@ -55,8 +56,13 @@ Collected by `bb init`, stored in `backup.db`:
 - Region = the middle hostname segment, e.g. `us-west-004`
 
 Partial reconfig without a full `init` (all require existing config):
-- `bucket [<name> [<id>]]` — show/switch the destination bucket (name + ID only).
+- `buckets` — **list all buckets** the credentials can see (NAME / ID / TYPE; active bucket marked `*`). Always uses the **native B2 API** (`b2_list_buckets`) regardless of the configured backend, since only it returns bucket IDs. Needs a key with account-wide **`listBuckets`** capability; a bucket-scoped key sees only its own bucket. See ADR-017.
+- `bucket [<name> [<id>]]` — show/switch the destination bucket (name + ID only). With `<name>` **only**, the bucket ID is **auto-resolved** from the account (native `b2_list_buckets`); pass `<id>` to set it explicitly (no lookup). On a failed/not-found lookup it clears the ID (old S3-only behavior). See ADR-017.
 - `appkey [<new-keyID>]` — replace the applicationKey, **read from stdin** (never argv/shell history); optional keyID rotates the whole pair. Interactive entry is **no-echo** (via `golang.org/x/term`); piped/non-terminal input reads a line (so `pass show … | bb appkey` and tests work). Empty → `ErrInvalidCredentials`; the secret is never echoed back (masked via `mask`). See ADR-016.
+
+`bb init` also **auto-resolves the bucket ID** from the bucket name (skipping its manual "Bucket ID" prompt) when the credentials can list buckets; it falls back to prompting on failure/not-found. See ADR-017.
+
+> **Credential gotcha:** the **keyID** (applicationKeyID, ~25 chars, on the App Keys page) is NOT the **Account ID** (12 hex chars, on the account dashboard). Entering the account ID as the keyID makes `b2_authorize_account` return **401 → `ErrAuthFailed`** ("authentication failed: status 401"). `keyName` is a cosmetic B2 label and is **not stored or used** by `bb` — only keyID + applicationKey authenticate. Fix a bad pair with `bb appkey <keyID>` (no full re-init). See bugs.md 2026-07-06.
 
 ### Manual bucket commands
 
@@ -77,9 +83,9 @@ Available once configured; all accept `--backend s3|b2`:
 - `b2` — `Backend` interface (embeds `Uploader`), `S3Backend`, `B2Backend`, `FakeBackend`; `NewBackend` factory
 - `backup` — folder walk + change detection + upload orchestration (depends on `b2.Uploader`; optional `b2.Deleter` via `WithDeleter` enables opt-in deletion propagation)
 - `daemon` — background watcher (built 2026-06-16): recursive fsnotify watch + 5-min fallback scan + 1s/5s debounce; `start`/`stop` lifecycle (PID file `~/backup_repo/daemon.pid`). Runs on **Linux + Windows** — OS-specific signal/stop/liveness logic lives in build-tagged `signals_unix.go` / `signals_windows.go` (ADR-014); `stop` is graceful on both — Unix via SIGTERM, Windows via a named stop event (forceful `proc.Kill` fallback), see ADR-016. Depends on `store` + `b2.Uploader` via `backup.Service`.
-- `cli` — subcommand handlers incl. `Ls`/`Get`/`Put`/`Rm`/`Find`/`Backend`/`Bucket`/`SetAppKey` + `Start`/`Stop`/`Serve` (io injected for testability)
+- `cli` — subcommand handlers incl. `Ls`/`Get`/`Put`/`Rm`/`Find`/`Backend`/`Bucket`/`Buckets`/`SetAppKey` + `Start`/`Stop`/`Serve` (io injected for testability). `Init`/`Bucket` take a `BucketLister` (wired to `b2.ListBuckets` in main.go) so the shared `resolveBucketID` name→ID lookup is stubbable without network. See ADR-017.
 - `web` — localhost web UI (`bb serve`, port 9171): `html/template` page over stdlib `net/http`; lists watched folders' contents with backup state, Upload + Close buttons, 🗑️ delete (local + remote). `127.0.0.1`-only, no auth, Host-header guard + `Origin`/`Referer` CSRF check on POSTs; browsing/deletion confined to watched folders. OS owner via build-tagged `owner_{unix,windows}.go`. See ADR-015.
-- root `main.go` — dispatch (incl. `start`/`stop`/`serve`/`bucket`/`appkey`) + per-command FlagSet + effective-backend factory
+- root `main.go` — dispatch (incl. `start`/`stop`/`serve`/`bucket`/`buckets`/`appkey`) + per-command FlagSet + effective-backend factory (`buildBackend`) + `b2ConfigFromStore` helper
 
 ### Reference docs
 

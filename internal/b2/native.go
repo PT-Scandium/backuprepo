@@ -35,6 +35,7 @@ type B2Backend struct {
 }
 
 type b2Auth struct {
+	AccountID           string
 	APIURL              string
 	DownloadURL         string
 	Token               string
@@ -69,9 +70,11 @@ func (b *B2Backend) authorize(ctx context.Context) (*b2Auth, error) {
 		return nil, fmt.Errorf("%w: status %d", apperr.ErrAuthFailed, resp.StatusCode)
 	}
 	// In v3, the storage-API endpoints (apiUrl, downloadUrl, recommendedPartSize)
-	// are nested under apiInfo.storageApi; only authorizationToken is top-level.
+	// are nested under apiInfo.storageApi; authorizationToken and accountId are
+	// top-level. accountId is required by account-scoped calls like b2_list_buckets.
 	var out struct {
 		AuthorizationToken string `json:"authorizationToken"`
+		AccountID          string `json:"accountId"`
 		APIInfo            struct {
 			StorageAPI struct {
 				APIURL              string `json:"apiUrl"`
@@ -84,6 +87,7 @@ func (b *B2Backend) authorize(ctx context.Context) (*b2Auth, error) {
 		return nil, fmt.Errorf("%w: decode: %v", apperr.ErrAuthFailed, err)
 	}
 	b.auth = &b2Auth{
+		AccountID:           out.AccountID,
 		APIURL:              out.APIInfo.StorageAPI.APIURL,
 		DownloadURL:         out.APIInfo.StorageAPI.DownloadURL,
 		Token:               out.AuthorizationToken,
@@ -272,6 +276,32 @@ func (b *B2Backend) List(ctx context.Context, prefix string, recursive bool) (Li
 			continue
 		}
 		out.Objects = append(out.Objects, o)
+	}
+	return out, nil
+}
+
+// ListBuckets returns every bucket the credentials can see, with the bucket ID
+// the native list/upload calls need. Only the native B2 API exposes bucket IDs,
+// so this has no S3Backend equivalent.
+func (b *B2Backend) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
+	auth, err := b.authorize(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Buckets []struct {
+			BucketName string `json:"bucketName"`
+			BucketID   string `json:"bucketId"`
+			BucketType string `json:"bucketType"`
+		} `json:"buckets"`
+	}
+	if err := b.postJSON(ctx, auth, "b2_list_buckets",
+		map[string]string{"accountId": auth.AccountID}, &resp); err != nil {
+		return nil, fmt.Errorf("%w: list buckets: %v", apperr.ErrListFailed, err)
+	}
+	out := make([]BucketInfo, 0, len(resp.Buckets))
+	for _, bk := range resp.Buckets {
+		out = append(out, BucketInfo{Name: bk.BucketName, ID: bk.BucketID, Type: bk.BucketType})
 	}
 	return out, nil
 }

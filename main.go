@@ -53,7 +53,7 @@ func run(args []string) int {
 
 	switch cmd {
 	case "init":
-		err = cli.Init(ctx, st, os.Stdin, os.Stdout)
+		err = cli.Init(ctx, st, os.Stdin, os.Stdout, b2.ListBuckets)
 	case "watch":
 		if len(rest) != 1 {
 			return fail(fmt.Errorf("usage: bb watch /path/to/dir"))
@@ -165,7 +165,13 @@ func run(args []string) int {
 		if len(rest) > 2 {
 			return fail(fmt.Errorf("usage: bb bucket [<name> [<bucket-id>]]"))
 		}
-		err = cli.Bucket(ctx, st, argAt(rest, 0), argAt(rest, 1), os.Stdout)
+		err = cli.Bucket(ctx, st, argAt(rest, 0), argAt(rest, 1), b2.ListBuckets, os.Stdout)
+	case "buckets":
+		cfg, e := b2ConfigFromStore(ctx, st)
+		if e != nil {
+			return fail(e)
+		}
+		err = cli.Buckets(ctx, cfg, os.Stdout)
 	case "appkey":
 		if len(rest) > 1 {
 			return fail(fmt.Errorf("usage: bb appkey [<new-keyID>]  (secret read from stdin)"))
@@ -262,21 +268,30 @@ func effectiveBackend(ctx context.Context, st *store.Store, override string) (st
 	return st.GetBackend(ctx)
 }
 
+// b2ConfigFromStore maps the stored config into a b2.Config.
+func b2ConfigFromStore(ctx context.Context, st *store.Store) (b2.Config, error) {
+	cfg, err := st.GetConfig(ctx)
+	if err != nil {
+		return b2.Config{}, err
+	}
+	return b2.Config{
+		Endpoint: cfg.Endpoint, Region: cfg.Region,
+		BucketName: cfg.Bucket, BucketID: cfg.BucketID,
+		KeyID: cfg.KeyID, AppKey: cfg.AppKey,
+	}, nil
+}
+
 // buildBackend constructs the selected backend from stored config.
 func buildBackend(ctx context.Context, st *store.Store, override string) (b2.Backend, error) {
 	kind, err := effectiveBackend(ctx, st, override)
 	if err != nil {
 		return nil, err
 	}
-	cfg, err := st.GetConfig(ctx)
+	cfg, err := b2ConfigFromStore(ctx, st)
 	if err != nil {
 		return nil, err
 	}
-	return b2.NewBackend(ctx, kind, b2.Config{
-		Endpoint: cfg.Endpoint, Region: cfg.Region,
-		BucketName: cfg.Bucket, BucketID: cfg.BucketID,
-		KeyID: cfg.KeyID, AppKey: cfg.AppKey,
-	})
+	return b2.NewBackend(ctx, kind, cfg)
 }
 
 // usage writes the command help text to w.
@@ -291,7 +306,9 @@ SETUP
   init                       Interactive setup: credentials, bucket name, bucket ID, endpoint, region, first folder
   config                     Show current configuration (app key masked) + active backend
   version                    Print the build version (e.g. 1.0.0)
-  bucket [<name> [<id>]]     Show, or switch to another bucket (changes only name + ID; keeps credentials)
+  bucket [<name> [<id>]]     Show, or switch to another bucket (keeps credentials). With <name> only,
+                               the bucket ID is auto-resolved from the account; pass <id> to set it explicitly
+  buckets                    List all buckets in the account with their IDs (always via the native B2 API)
   appkey [<new-keyID>]       Replace the stored application key — reads the secret from stdin (keeps it out
                                of shell history); pass a new keyID to rotate the whole pair
 
