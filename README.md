@@ -8,28 +8,28 @@ A cross-platform CLI that backs up your files to a Backblaze B2 bucket — eithe
 
 ## Install
 
-### Download a prebuilt binary (v1.0.0)
+### Download a prebuilt binary (v1.0.1)
 
-No Go toolchain needed — grab the static binary for your platform from the [**v1.0.0 release**](https://github.com/PT-Scandium/backuprepo/releases/tag/v1.0.0):
+No Go toolchain needed — grab the static binary for your platform from the [**v1.0.1 release**](https://github.com/PT-Scandium/backuprepo/releases/tag/v1.0.1):
 
 | Platform | Download |
 |----------|----------|
-| Linux (x86-64) | [`bb-v1.0.0-linux-amd64`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.0/bb-v1.0.0-linux-amd64) |
-| Windows (x86-64) | [`bb-v1.0.0-windows-amd64.exe`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.0/bb-v1.0.0-windows-amd64.exe) |
-| Checksums | [`SHA256SUMS`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.0/SHA256SUMS) |
+| Linux (x86-64) | [`bb-v1.0.1-linux-amd64`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.1/bb-v1.0.1-linux-amd64) |
+| Windows (x86-64) | [`bb-v1.0.1-windows-amd64.exe`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.1/bb-v1.0.1-windows-amd64.exe) |
+| Checksums | [`SHA256SUMS`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.1/SHA256SUMS) |
 
 **Linux:**
 
 ```sh
-curl -LO https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.0/bb-v1.0.0-linux-amd64
-curl -LO https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.0/SHA256SUMS
+curl -LO https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.1/bb-v1.0.1-linux-amd64
+curl -LO https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.1/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing     # verify the download
-chmod +x bb-v1.0.0-linux-amd64
-sudo mv bb-v1.0.0-linux-amd64 /usr/local/bin/bb
-bb version                                   # -> bb 1.0.0
+chmod +x bb-v1.0.1-linux-amd64
+sudo mv bb-v1.0.1-linux-amd64 /usr/local/bin/bb
+bb version                                   # -> bb 1.0.1
 ```
 
-**Windows:** download `bb-v1.0.0-windows-amd64.exe` (optionally verify it against `SHA256SUMS`), rename it to `bb.exe`, and place it on your `PATH`.
+**Windows:** download `bb-v1.0.1-windows-amd64.exe` (optionally verify it against `SHA256SUMS`), rename it to `bb.exe`, and place it on your `PATH`.
 
 ### Build from source
 
