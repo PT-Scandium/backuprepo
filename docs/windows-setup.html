@@ -85,13 +85,34 @@ footer a{color:var(--accent)}
 <table>
   <thead><tr><th>#</th><th>Step</th><th>Exactly what to do</th></tr></thead>
   <tbody>
-    <tr><td>1</td><td>Open PowerShell</td><td>Press <kbd>Windows</kbd> → type <code>powershell</code> → press <kbd>Enter</kbd></td></tr>
-    <tr><td>2</td><td>Create a folder for the tool</td><td><code>mkdir $env:LOCALAPPDATA\Programs\bb</code></td></tr>
-    <tr><td>3</td><td>Move the download and rename it</td><td><code>move $env:USERPROFILE\Downloads\bb-v1.0.3-windows-amd64.exe $env:LOCALAPPDATA\Programs\bb\bb.exe</code></td></tr>
-    <tr><td>4</td><td>Remove the download block</td><td><code>Unblock-File $env:LOCALAPPDATA\Programs\bb\bb.exe</code></td></tr>
-    <tr><td>5</td><td>Add it to your PATH</td><td><code>[Environment]::SetEnvironmentVariable("Path",[Environment]::GetEnvironmentVariable("Path","User")+";$env:LOCALAPPDATA\Programs\bb","User")</code></td></tr>
-    <tr><td>6</td><td>Reopen PowerShell</td><td>Close the window → <kbd>Windows</kbd> → <code>powershell</code> → <kbd>Enter</kbd> (PATH only applies to new windows)</td></tr>
-    <tr><td>7</td><td>Check the install</td><td><code>bb version</code> → prints <code>bb 1.0.3</code></td></tr>
+    <tr>
+      <td>1</td><td>Open File Explorer</td>
+      <td>Click the <strong>yellow folder icon</strong> on the taskbar (or press <kbd>Windows</kbd>+<kbd>E</kbd>). In the left sidebar, click <strong>Downloads</strong> — you should see <strong>bb-v1.0.3-windows-amd64.exe</strong> in the list.</td>
+    </tr>
+    <tr>
+      <td>2</td><td>Turn on file name extensions</td>
+      <td>In the Explorer toolbar click <strong>View</strong> → <strong>Show</strong> → tick <strong>File name extensions</strong>. <em>(Windows 10: the <strong>View</strong> tab → tick <strong>File name extensions</strong>.)</em> Without this, step 4 accidentally names the file <code>bb.exe.exe</code>.</td>
+    </tr>
+    <tr>
+      <td>3</td><td>Unblock the download</td>
+      <td><strong>Right-click</strong> the file → <strong>Properties</strong> → stay on the <strong>General</strong> tab → at the very bottom tick <strong>Unblock</strong> → click <strong>OK</strong>. <em>(If there is no Unblock box, Windows already trusts it — just click Cancel.)</em></td>
+    </tr>
+    <tr>
+      <td>4</td><td>Rename it to <code>bb.exe</code></td>
+      <td><strong>Left-click the file once</strong> to select it, then press <kbd>F2</kbd>. Type <strong>bb.exe</strong> and press <kbd>Enter</kbd>. When Windows asks <em>“the file might become unusable”</em>, click <strong>Yes</strong>.</td>
+    </tr>
+    <tr>
+      <td>5</td><td>Create a folder and move it there</td>
+      <td>In the sidebar click <strong>Home</strong> (Windows 10: <strong>This PC</strong> → <strong>Local Disk (C:)</strong> → <strong>Users</strong> → your name). <strong>Right-click</strong> any empty space → <strong>New</strong> → <strong>Folder</strong> → name it <strong>bb</strong> → <kbd>Enter</kbd>. Now go back to <strong>Downloads</strong>, <strong>drag <code>bb.exe</code></strong> onto that new <strong>bb</strong> folder in the sidebar to move it in.</td>
+    </tr>
+    <tr>
+      <td>6</td><td>Tell Windows where to find it</td>
+      <td>Press <kbd>Windows</kbd>, type <strong>environment</strong>, and click <strong>Edit environment variables for your account</strong>. In the <strong>upper</strong> box, click the row named <strong>Path</strong> → <strong>Edit…</strong> → <strong>New</strong> → type <code>C:\Users\&lt;your-name&gt;\bb</code> → <strong>OK</strong> → <strong>OK</strong>. <em>(Use your real Windows user folder name — it is shown in the Explorer address bar from step 5.)</em></td>
+    </tr>
+    <tr>
+      <td>7</td><td>Check that it works</td>
+      <td>Press <kbd>Windows</kbd> → type <strong>powershell</strong> → <kbd>Enter</kbd>. Type <code>bb version</code> → <kbd>Enter</kbd>. It should print <code>bb 1.0.3</code>. <em>(If you already had a PowerShell window open, close it and open a new one — step 6 only applies to new windows.)</em></td>
+    </tr>
   </tbody>
 </table>
 </div>
@@ -144,7 +165,7 @@ bb upload</code></pre>
 
 <p>To keep it running continuously, create a scheduled task that starts the watcher at every logon:</p>
 
-<pre><code>schtasks /create /tn "backuprepo" /sc onlogon /tr "$env:LOCALAPPDATA\Programs\bb\bb.exe start" /f</code></pre>
+<pre><code>schtasks /create /tn "backuprepo" /sc onlogon /tr "$env:USERPROFILE\bb\bb.exe start" /f</code></pre>
 
 <p>Stop the watcher at any time with <code>bb stop</code>.</p>
 

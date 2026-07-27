@@ -154,6 +154,7 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 - **Status**: Done — docs only, no code touched. Committed directly to `master`.
 - **Description**: Added a `### Windows quick start` section to README (16-step table: PowerShell install → `bb init` login → `bb put` file/folder), plus a standalone styled `docs/windows-setup.html` reusing the web UI's warm palette (`internal/web/template.go`) with a dark-mode block. Native **B2 backend only** — S3 endpoint/region omitted.
 - **Notes**: Two accuracy points verified against code, not assumed: `bb init` asks the S3 endpoint/region prompts **unconditionally** (`internal/cli/cli.go:55-56`), so the doc says press Enter to skip; and `bb backend b2` is a **required** step, since the stored default is `s3` and blank endpoint + s3 backend fails every later command.
+- **Follow-up (same day)**: HTML "set up the environment" section rewritten as GUI/mouse steps (Explorer, right-click → Properties → Unblock, F2 rename, drag-to-move, Environment Variables dialog) for non-technical users. Install dir moved `%LOCALAPPDATA%\Programs\bb` → `C:\Users\<name>\bb` because AppData is hidden in Explorer; the page's `schtasks` line was updated to match. **Known divergence**: README's Windows quick start still documents the PowerShell/LOCALAPPDATA route — align it if the GUI route becomes canonical.
 
 ## Pending / Next
 
