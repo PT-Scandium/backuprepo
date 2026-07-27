@@ -29,7 +29,7 @@ sudo mv bb-v1.0.3-linux-amd64 /usr/local/bin/bb
 bb version                                   # -> bb 1.0.3
 ```
 
-**Windows:** download `bb-v1.0.3-windows-amd64.exe` (optionally verify it against `SHA256SUMS`), rename it to `bb.exe`, and place it on your `PATH`.
+**Windows:** download `bb-v1.0.3-windows-amd64.exe` (optionally verify it against `SHA256SUMS`), rename it to `bb.exe`, and place it on your `PATH` — step by step in [**Windows quick start**](#windows-quick-start) below.
 
 ### Build from source
 
@@ -50,6 +50,39 @@ make clean | uninstall | test | help       # housekeeping targets
 No `make`? `go build -ldflags="-s -w" -o bb .` produces the same binary. The stripped binary is ~21 MB.
 
 > This guide uses the command **`bb`** (the installed name). If you only ran `make`, call it as `./bb` from the repo directory.
+
+### Windows quick start
+
+Install, log in, and upload — using the **native B2 backend** (no S3 endpoint or region needed). Also available as a printable page: [`docs/windows-setup.html`](docs/windows-setup.html).
+
+| # | Step | Exactly what to do |
+|---|------|--------------------|
+| 1 | Open PowerShell | Press **Windows key** → type `powershell` → **Enter** |
+| 2 | Create a folder for the tool | `mkdir $env:LOCALAPPDATA\Programs\bb` |
+| 3 | Move the download and rename it | `move $env:USERPROFILE\Downloads\bb-v1.0.3-windows-amd64.exe $env:LOCALAPPDATA\Programs\bb\bb.exe` |
+| 4 | Remove the "downloaded from internet" block | `Unblock-File $env:LOCALAPPDATA\Programs\bb\bb.exe` |
+| 5 | Add it to your `PATH` | `[Environment]::SetEnvironmentVariable("Path",[Environment]::GetEnvironmentVariable("Path","User")+";$env:LOCALAPPDATA\Programs\bb","User")` |
+| 6 | Reopen PowerShell | Close the window → **Windows key** → `powershell` → **Enter** (`PATH` only applies to new windows) |
+| 7 | Check the install | `bb version` → prints `bb 1.0.3` |
+| 8 | Start setup | `bb init` |
+| 9 | Answer the credential prompts | Paste **keyID** → **Enter**, paste **applicationKey** → **Enter**, type **bucket name** → **Enter** |
+| 10 | Bucket ID | Resolved automatically. If it still asks, paste the **Bucket ID** from the B2 console → **Enter** |
+| 11 | Skip the two S3 prompts | Press **Enter** on *S3 endpoint URL* and again on *S3 region* — unused by the B2 backend |
+| 12 | Folder to watch | Press **Enter** to skip (add it later with `bb watch`) |
+| 13 | Select the B2 backend | `bb backend b2` — required, since the stored default is `s3` |
+| 14 | Verify the login works | `bb ls` — lists the bucket; credentials stay saved, so you never log in again |
+| 15 | Upload one file | `bb put C:\Users\you\Documents\report.pdf reports/report.pdf` |
+| 16 | Upload a whole folder | `bb put C:\Users\you\Documents\ documents/ -r` (resume an interrupted run with `--skip-existing`) |
+
+Credentials are saved encrypted in `%USERPROFILE%\backup_repo\`. Confirm an upload arrived with `bb ls -r`.
+
+**Automatic backup instead of manual `put`:** run `bb watch C:\Users\you\Documents` once, then `bb upload` whenever you want changed files sent — it is a safe no-op when nothing changed. To have it run continuously at logon:
+
+```powershell
+schtasks /create /tn "backuprepo" /sc onlogon /tr "$env:LOCALAPPDATA\Programs\bb\bb.exe start" /f
+```
+
+Stop it with `bb stop`. Two Windows notes: the binary is **unsigned**, so SmartScreen shows *"Windows protected your PC"* on first run (**More info → Run anyway**); and `bb.exe` is a **console app** — double-clicking it just runs `bb status` and closes, so always call it from PowerShell.
 
 ---
 

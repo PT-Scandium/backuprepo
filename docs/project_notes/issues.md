@@ -150,6 +150,11 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 - **Description**: `bb put -r` no longer aborts the whole walk on the first per-file failure — it reports `FAILED <key>: <err>`, counts it, continues, and ends with an `Uploaded/Skipped/Failed` summary (returns `ErrUploadFailed` / non-zero exit if any failed); filesystem walk errors still abort. Added opt-in `--skip-existing` (skips files already present remotely, presence-only, for resuming an interrupted upload). `FakeBackend` gained a `FailUpload` hook; tests `TestPutRecursiveContinuesPastFailure`, `TestPutRecursiveSkipExisting`.
 - **Notes**: Closes the "put -r batch resilience" follow-up logged under v1.0.2. Complements ADR-018 retry (transient vs genuine per-file failures).
 
+### 2026-07-27 - Windows quick-start docs (README section + HTML page)
+- **Status**: Done — docs only, no code touched. Committed directly to `master`.
+- **Description**: Added a `### Windows quick start` section to README (16-step table: PowerShell install → `bb init` login → `bb put` file/folder), plus a standalone styled `docs/windows-setup.html` reusing the web UI's warm palette (`internal/web/template.go`) with a dark-mode block. Native **B2 backend only** — S3 endpoint/region omitted.
+- **Notes**: Two accuracy points verified against code, not assumed: `bb init` asks the S3 endpoint/region prompts **unconditionally** (`internal/cli/cli.go:55-56`), so the doc says press Enter to skip; and `bb backend b2` is a **required** step, since the stored default is `s3` and blank endpoint + s3 backend fails every later command.
+
 ## Pending / Next
 
 - ~~**`rm` flag ordering**~~ — RESOLVED 2026-06-16: flags now work in any position via `parseFlags` (see work log + bugs.md).

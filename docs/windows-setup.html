@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>backuprepo (bb) — Windows setup</title>
+<style>
+/* Warm palette mirrors the shipped web UI (internal/web/template.go). */
+:root{
+  --bg:#fff8f0; --panel:#fffdf9; --accent:#c0532b; --accent2:#e07b39;
+  --text:#4a342e; --muted:#9b8579; --line:#f0dcc8; --head:#fae7d4;
+  --zebra:#fffaf3; --code-bg:#fdeede; --note-bg:#fdeede;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#241a16; --panel:#2e211c; --accent:#f08a5d; --accent2:#c0532b;
+    --text:#f2e4d8; --muted:#b69c8c; --line:#4a352b; --head:#3a2a22;
+    --zebra:#332420; --code-bg:#3a2a22; --note-bg:#3a2a22;
+  }
+}
+*{box-sizing:border-box}
+body{
+  margin:0; padding:0 16px 64px;
+  background:var(--bg); color:var(--text);
+  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+header{
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  color:#fff; padding:28px 24px; margin:0 -16px 32px;
+}
+header h1{margin:0 0 6px; font-size:26px; letter-spacing:-.01em}
+header p{margin:0; opacity:.92; font-size:15px}
+main{max-width:940px; margin:0 auto}
+h2{
+  font-size:19px; margin:36px 0 12px; padding-bottom:8px;
+  border-bottom:2px solid var(--line); color:var(--accent);
+}
+p{margin:0 0 14px}
+code{
+  background:var(--code-bg); color:var(--accent);
+  padding:2px 6px; border-radius:5px;
+  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  overflow-wrap:anywhere;
+}
+pre{
+  background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--accent);
+  border-radius:8px; padding:14px 16px; margin:0 0 16px; overflow-x:auto;
+}
+pre code{background:none; color:var(--text); padding:0}
+kbd{
+  background:var(--panel); border:1px solid var(--line); border-bottom-width:2px;
+  border-radius:5px; padding:1px 6px; font-size:13px; font-family:inherit; white-space:nowrap;
+}
+.table-wrap{overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--panel)}
+table{border-collapse:collapse; width:100%; min-width:640px; font-size:14.5px}
+th,td{padding:11px 14px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top}
+th{background:var(--head); color:var(--accent); font-weight:600; white-space:nowrap}
+tr:last-child td{border-bottom:none}
+tbody tr:nth-child(even){background:var(--zebra)}
+td:first-child{width:38px; color:var(--muted); font-variant-numeric:tabular-nums}
+td:nth-child(2){width:220px; font-weight:600}
+.note{
+  background:var(--note-bg); border:1px solid var(--line); border-radius:8px;
+  padding:12px 16px; margin:0 0 16px;
+}
+.note strong{color:var(--accent)}
+footer{margin-top:44px; padding-top:16px; border-top:1px solid var(--line); color:var(--muted); font-size:13.5px}
+footer a{color:var(--accent)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>backuprepo (<code style="background:rgba(255,255,255,.18);color:#fff">bb</code>) — Windows setup</h1>
+  <p>Install, log in, and upload files &amp; folders to Backblaze B2 — native B2 backend, v1.0.3</p>
+</header>
+
+<main>
+
+<p>You have downloaded <code>bb-v1.0.3-windows-amd64.exe</code> from the GitHub releases page. Follow the 16 steps below in order.</p>
+
+<h2>1 · Set up the environment</h2>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>#</th><th>Step</th><th>Exactly what to do</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Open PowerShell</td><td>Press <kbd>Windows</kbd> → type <code>powershell</code> → press <kbd>Enter</kbd></td></tr>
+    <tr><td>2</td><td>Create a folder for the tool</td><td><code>mkdir $env:LOCALAPPDATA\Programs\bb</code></td></tr>
+    <tr><td>3</td><td>Move the download and rename it</td><td><code>move $env:USERPROFILE\Downloads\bb-v1.0.3-windows-amd64.exe $env:LOCALAPPDATA\Programs\bb\bb.exe</code></td></tr>
+    <tr><td>4</td><td>Remove the download block</td><td><code>Unblock-File $env:LOCALAPPDATA\Programs\bb\bb.exe</code></td></tr>
+    <tr><td>5</td><td>Add it to your PATH</td><td><code>[Environment]::SetEnvironmentVariable("Path",[Environment]::GetEnvironmentVariable("Path","User")+";$env:LOCALAPPDATA\Programs\bb","User")</code></td></tr>
+    <tr><td>6</td><td>Reopen PowerShell</td><td>Close the window → <kbd>Windows</kbd> → <code>powershell</code> → <kbd>Enter</kbd> (PATH only applies to new windows)</td></tr>
+    <tr><td>7</td><td>Check the install</td><td><code>bb version</code> → prints <code>bb 1.0.3</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="note">
+  <strong>SmartScreen warning?</strong> The binary is unsigned, so Windows may show <em>“Windows protected your PC”</em> on first run — click <strong>More info → Run anyway</strong>. Also: <code>bb.exe</code> is a console program. Double-clicking it just runs <code>bb status</code> and closes the window, so always run it from PowerShell.
+</div>
+
+<h2>2 · Log in (one time only)</h2>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>#</th><th>Step</th><th>Exactly what to do</th></tr></thead>
+  <tbody>
+    <tr><td>8</td><td>Start setup</td><td><code>bb init</code></td></tr>
+    <tr><td>9</td><td>Credential prompts</td><td>Paste <strong>keyID</strong> → <kbd>Enter</kbd>, paste <strong>applicationKey</strong> → <kbd>Enter</kbd>, type <strong>bucket name</strong> → <kbd>Enter</kbd></td></tr>
+    <tr><td>10</td><td>Bucket ID</td><td>Resolved automatically. If it still asks, paste the <strong>Bucket ID</strong> from the B2 console → <kbd>Enter</kbd></td></tr>
+    <tr><td>11</td><td>Skip the two S3 prompts</td><td>Press <kbd>Enter</kbd> on <em>S3 endpoint URL</em>, then <kbd>Enter</kbd> again on <em>S3 region</em> — unused by the B2 backend</td></tr>
+    <tr><td>12</td><td>Folder to watch</td><td>Press <kbd>Enter</kbd> to skip — you can add one later with <code>bb watch</code></td></tr>
+    <tr><td>13</td><td>Select the B2 backend</td><td><code>bb backend b2</code> — required, because the stored default is <code>s3</code></td></tr>
+    <tr><td>14</td><td>Verify the login</td><td><code>bb ls</code> — lists your bucket</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Credentials are saved <strong>encrypted</strong> in <code>%USERPROFILE%\backup_repo\</code>. You never log in again unless the key is rotated or revoked.</p>
+
+<h2>3 · Upload a file or a folder</h2>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>#</th><th>Step</th><th>Exactly what to do</th></tr></thead>
+  <tbody>
+    <tr><td>15</td><td>Upload one file</td><td><code>bb put C:\Users\you\Documents\report.pdf reports/report.pdf</code></td></tr>
+    <tr><td>16</td><td>Upload a whole folder</td><td><code>bb put C:\Users\you\Documents\ documents/ -r</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>Confirm everything arrived with <code>bb ls -r</code>. If a big folder upload is interrupted, resume it cheaply — already-uploaded files are skipped:</p>
+
+<pre><code>bb put C:\Users\you\Documents\ documents/ -r --skip-existing</code></pre>
+
+<h2>Optional · Automatic backup</h2>
+
+<p>Instead of running <code>bb put</code> by hand, register a folder once and let <code>bb</code> send only what changed. <code>bb upload</code> is a safe no-op when nothing has changed:</p>
+
+<pre><code>bb watch C:\Users\you\Documents
+bb upload</code></pre>
+
+<p>To keep it running continuously, create a scheduled task that starts the watcher at every logon:</p>
+
+<pre><code>schtasks /create /tn "backuprepo" /sc onlogon /tr "$env:LOCALAPPDATA\Programs\bb\bb.exe start" /f</code></pre>
+
+<p>Stop the watcher at any time with <code>bb stop</code>.</p>
+
+<footer>
+  backuprepo v1.0.3 · MIT (PT-Scandium) · full documentation in <a href="../README.md">README.md</a>
+</footer>
+
+</main>
+</body>
+</html>
