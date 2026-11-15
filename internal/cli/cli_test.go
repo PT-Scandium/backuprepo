@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -572,5 +573,225 @@ func TestReadSecretFromAndEOF(t *testing.T) {
 	// readSecret (used by `bb appkey`) treats EOF after an answer as success.
 	if s, err := readSecret("Q: ", strings.NewReader("tail-no-newline"), &bytes.Buffer{}); s != "tail-no-newline" || err != nil {
 		t.Errorf("readSecret = %q, %v", s, err)
+	}
+}
+
+// TestWatchStoresAbsolutePath is the regression for `bb watch` storing the
+// argument verbatim: a relative entry resolves against $HOME under the
+// systemd service, i.e. a different folder.
+func TestWatchStoresAbsolutePath(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	base := t.TempDir()
+	if err := os.Mkdir(filepath.Join(base, "proj"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(base)
+	var out bytes.Buffer
+	if err := Watch(ctx, st, "proj/", &out); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	want := filepath.Join(base, "proj")
+	if folders, _ := st.ListFolders(ctx); len(folders) != 1 || folders[0] != want {
+		t.Errorf("stored %q, want [%q]", folders, want)
+	}
+	if !strings.Contains(out.String(), "Watching "+want) {
+		t.Errorf("output = %q", out.String())
+	}
+}
+
+func TestWatchExpandsTilde(t *testing.T) {
+	st := newStore(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := os.Mkdir(filepath.Join(home, "Documents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Watch(context.Background(), st, "~/Documents", &bytes.Buffer{}); err != nil {
+		t.Fatalf("Watch(~/Documents): %v", err)
+	}
+	if folders, _ := st.ListFolders(context.Background()); len(folders) != 1 || folders[0] != filepath.Join(home, "Documents") {
+		t.Errorf("stored %q", folders)
+	}
+}
+
+// TestWatchKeepsEquivalentEntry: re-watching a folder already stored under
+// another spelling must not add a near-duplicate (which would re-upload
+// everything under new object names).
+func TestWatchKeepsEquivalentEntry(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	if err := st.AddFolder(ctx, dir+string(filepath.Separator)); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Watch(ctx, st, dir, &out); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	if folders, _ := st.ListFolders(ctx); len(folders) != 1 {
+		t.Errorf("want 1 entry, got %q", folders)
+	}
+	if !strings.Contains(out.String(), "Already watching "+dir+string(filepath.Separator)) {
+		t.Errorf("output = %q", out.String())
+	}
+}
+
+func TestWatchMissingFolder(t *testing.T) {
+	st := newStore(t)
+	err := Watch(context.Background(), st, filepath.Join(t.TempDir(), "nope"), &bytes.Buffer{})
+	if !errors.Is(err, apperr.ErrFolderNotFound) {
+		t.Fatalf("want ErrFolderNotFound, got %v", err)
+	}
+}
+
+// TestUnwatchAnySpelling is the regression for unwatch requiring the exact
+// stored text (e.g. the trailing "/" a user typed during init).
+func TestUnwatchAnySpelling(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	sep := string(filepath.Separator)
+	cases := map[string]struct{ stored, arg string }{
+		"trailing slash stored, plain given": {dir + sep, dir},
+		"plain stored, trailing slash given": {dir, dir + sep},
+		"exact legacy relative entry":        {"legacy/rel", "legacy/rel"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			st := newStore(t)
+			if err := st.AddFolder(ctx, tc.stored); err != nil {
+				t.Fatal(err)
+			}
+			var out bytes.Buffer
+			if err := Unwatch(ctx, st, tc.arg, &out); err != nil {
+				t.Fatalf("Unwatch(%q): %v", tc.arg, err)
+			}
+			if folders, _ := st.ListFolders(ctx); len(folders) != 0 {
+				t.Errorf("not removed: %q", folders)
+			}
+			if !strings.Contains(out.String(), "Stopped watching "+tc.stored) {
+				t.Errorf("output should name the stored entry: %q", out.String())
+			}
+		})
+	}
+}
+
+func TestUnwatchRelativeAndTildeArgs(t *testing.T) {
+	ctx := context.Background()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	docs := filepath.Join(home, "Documents")
+
+	for _, arg := range []string{"~/Documents/", "Documents"} {
+		st := newStore(t)
+		if err := st.AddFolder(ctx, docs); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(home)
+		if err := Unwatch(ctx, st, arg, &bytes.Buffer{}); err != nil {
+			t.Fatalf("Unwatch(%q): %v", arg, err)
+		}
+		if folders, _ := st.ListFolders(ctx); len(folders) != 0 {
+			t.Errorf("Unwatch(%q) left %q", arg, folders)
+		}
+	}
+}
+
+// TestWatchUnwatchRejectEmptyPath is the regression for review finding S1:
+// filepath.Abs("") is the current directory, so `bb watch "$UNSET"` run from
+// $HOME would have backed up the whole home directory.
+func TestWatchUnwatchRejectEmptyPath(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+	if err := st.AddFolder(ctx, cwd); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"", "  "} {
+		if err := Watch(ctx, st, p, &bytes.Buffer{}); !errors.Is(err, apperr.ErrFolderNotFound) {
+			t.Errorf("Watch(%q) = %v, want ErrFolderNotFound", p, err)
+		}
+		if err := Unwatch(ctx, st, p, &bytes.Buffer{}); err == nil {
+			t.Errorf("Unwatch(%q) must fail, not remove the current directory", p)
+		}
+	}
+	if folders, _ := st.ListFolders(ctx); len(folders) != 1 || folders[0] != cwd {
+		t.Errorf("watch list changed: %q", folders)
+	}
+}
+
+// TestWatchLegacyRelativeEntryNotDuplicated (review finding S3): re-watching a
+// folder an older bb stored as a relative path must not add the absolute twin,
+// whose objects would be named differently (a second full upload).
+func TestWatchLegacyRelativeEntryNotDuplicated(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	base := t.TempDir()
+	if err := os.Mkdir(filepath.Join(base, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(base)
+	if err := st.AddFolder(ctx, "docs"); err != nil { // as stored by bb <= 1.0.6
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Watch(ctx, st, "docs", &out); err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	if folders, _ := st.ListFolders(ctx); len(folders) != 1 || folders[0] != "docs" {
+		t.Errorf("want only the legacy entry, got %q", folders)
+	}
+	for _, want := range []string{"Already watching docs (stored as a relative path", "bb unwatch docs"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output missing %q: %q", want, out.String())
+		}
+	}
+}
+
+func TestExpandHome(t *testing.T) {
+	home := filepath.Join("h", "me")
+	cases := map[string]string{
+		"~":                                    home,
+		"~/a/b":                                filepath.Join(home, "a", "b"),
+		"~" + string(filepath.Separator) + "c": filepath.Join(home, "c"),
+		"~user/x":                              "~user/x",
+		"/abs":                                 "/abs",
+		"":                                     "",
+	}
+	for in, want := range cases {
+		if got := expandHome(in, home); got != want {
+			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestUnwatchNotWatched(t *testing.T) {
+	st := newStore(t)
+	err := Unwatch(context.Background(), st, filepath.Join(t.TempDir(), "x"), &bytes.Buffer{})
+	if !errors.Is(err, apperr.ErrFolderNotWatched) {
+		t.Fatalf("want ErrFolderNotWatched, got %v", err)
+	}
+}
+
+func TestInitFolderPromptExpandsTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	if err := os.Mkdir(filepath.Join(home, "Documents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := newStore(t)
+	lister := func(context.Context, b2.Config) ([]b2.BucketInfo, error) {
+		return []b2.BucketInfo{{Name: "b", ID: "bid"}}, nil
+	}
+	in := strings.NewReader("k\na\nb\n\n\n~/Documents\n")
+	if err := Init(context.Background(), st, in, &bytes.Buffer{}, lister); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if folders, _ := st.ListFolders(context.Background()); len(folders) != 1 || folders[0] != filepath.Join(home, "Documents") {
+		t.Errorf("stored %q", folders)
 	}
 }

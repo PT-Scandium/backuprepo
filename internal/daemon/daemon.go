@@ -15,6 +15,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -263,15 +264,25 @@ func addRecursive(w *fsnotify.Watcher, root string) error {
 }
 
 // Stop signals a running daemon (identified by its PID file in dir) to shut down.
+// It never signals a process that isn't the daemon: if the recorded PID is dead
+// or now belongs to another process (PID reuse after an unclean shutdown), the
+// stale PID file is removed and Stop reports that no daemon is running.
 func Stop(dir string, out io.Writer) error {
-	data, err := os.ReadFile(pidPath(dir))
-	if err != nil {
+	rec, err := readPIDFile(dir)
+	if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: not running (no pid file)", apperr.ErrDaemon)
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return fmt.Errorf("%w: corrupt pid file", apperr.ErrDaemon)
+	if errors.Is(err, apperr.ErrDaemon) {
+		return err
 	}
+	if err != nil {
+		return fmt.Errorf("%w: read pid file: %v", apperr.ErrDaemon, err)
+	}
+	if !rec.alive() {
+		removePID(dir)
+		return fmt.Errorf("%w: not running (removed stale pid file for pid %d)", apperr.ErrDaemon, rec.pid)
+	}
+	pid := rec.pid
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("%w: find process %d: %v", apperr.ErrDaemon, pid, err)
@@ -284,32 +295,110 @@ func Stop(dir string, out io.Writer) error {
 }
 
 // RunningPID reports the PID of a live daemon recorded in dir's PID file.
-// A missing, corrupt, or stale (dead process) PID file reports false.
+// A missing, corrupt, or stale (dead or reused PID) PID file reports false.
 func RunningPID(dir string) (int, bool) {
+	rec, err := readPIDFile(dir)
+	if err != nil || !rec.alive() {
+		return 0, false
+	}
+	return rec.pid, true
+}
+
+// pidRecord identifies the running daemon: its PID (daemon.pid) and, where the
+// OS exposes it (Linux), its start time (daemon.start).
+type pidRecord struct {
+	pid   int
+	start string // "" if unknown
+}
+
+// readPIDFile reads the daemon's PID from daemon.pid (just the number — the
+// format every bb version reads, so older binaries still interoperate) and,
+// from daemon.start ("<pid> <starttime>"), its start time — used only when the
+// PIDs agree, so a daemon.pid rewritten by an older bb is never paired with a
+// stale start time. A missing daemon.pid returns an error matching
+// os.ErrNotExist; an unparsable one returns apperr.ErrDaemon.
+func readPIDFile(dir string) (pidRecord, error) {
 	data, err := os.ReadFile(pidPath(dir))
 	if err != nil {
-		return 0, false
+		return pidRecord{}, err
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 || !processAlive(pid) {
-		return 0, false
+	if err != nil || pid <= 0 {
+		return pidRecord{}, fmt.Errorf("%w: corrupt pid file", apperr.ErrDaemon)
 	}
-	return pid, true
+	rec := pidRecord{pid: pid}
+	if sdata, err := os.ReadFile(startPath(dir)); err == nil {
+		if f := strings.Fields(string(sdata)); len(f) == 2 && f[0] == strconv.Itoa(pid) {
+			rec.start = f[1]
+		}
+	}
+	return rec, nil
+}
+
+// alive reports whether r still names the daemon that wrote it: the PID must
+// be running and, when a start time was recorded and can be read, the start
+// times must match — so a PID reused by another process is not mistaken for
+// the daemon (and never signalled by Stop). Without a recorded or readable
+// start time it falls back to processAlive alone.
+func (r pidRecord) alive() bool {
+	if r.pid <= 0 || !processAlive(r.pid) {
+		return false
+	}
+	if r.start == "" {
+		return true
+	}
+	cur, ok := procStartTime(r.pid)
+	if !ok {
+		return true
+	}
+	return cur == r.start
+}
+
+// parseStatStartTime extracts the start time (field 22) from the contents of
+// /proc/<pid>/stat. Field 2 is the command name in parentheses and may itself
+// contain spaces and ")", so fields are counted from the LAST ")".
+func parseStatStartTime(stat string) (string, bool) {
+	i := strings.LastIndexByte(stat, ')')
+	if i < 0 {
+		return "", false
+	}
+	fields := strings.Fields(stat[i+1:]) // fields[0] is field 3 (state)
+	const startIdx = 22 - 3
+	if len(fields) <= startIdx {
+		return "", false
+	}
+	return fields[startIdx], true
 }
 
 // pidPath returns the daemon PID file path within dir.
 func pidPath(dir string) string { return filepath.Join(dir, "daemon.pid") }
 
-// writePID records the current PID, refusing to start if a live daemon is found.
+// startPath returns the file recording the daemon's "<pid> <starttime>".
+func startPath(dir string) string { return filepath.Join(dir, "daemon.start") }
+
+// writePID records the current PID (and, on Linux, its start time in a
+// separate file — see readPIDFile), refusing
+// to start if a live daemon is found. A stale file — dead process, or a PID
+// since reused by another process — is overwritten.
 func writePID(dir string) error {
-	if data, err := os.ReadFile(pidPath(dir)); err == nil {
-		if pid, perr := strconv.Atoi(strings.TrimSpace(string(data))); perr == nil && processAlive(pid) {
-			return fmt.Errorf("%w: already running (pid %d); use `bb stop`", apperr.ErrDaemon, pid)
-		}
-		// Stale PID file (process gone); fall through and overwrite it.
+	if rec, err := readPIDFile(dir); err == nil && rec.alive() {
+		return fmt.Errorf("%w: already running (pid %d); use `bb stop`", apperr.ErrDaemon, rec.pid)
 	}
-	return os.WriteFile(pidPath(dir), []byte(strconv.Itoa(os.Getpid())), 0o600)
+	pid := strconv.Itoa(os.Getpid())
+	// Start file first, so a reader that sees the new daemon.pid also sees its
+	// start time; it is ignored anyway unless its PID matches daemon.pid.
+	if start, ok := procStartTime(os.Getpid()); ok {
+		if err := os.WriteFile(startPath(dir), []byte(pid+" "+start+"\n"), 0o600); err != nil {
+			return err
+		}
+	} else {
+		_ = os.Remove(startPath(dir))
+	}
+	return os.WriteFile(pidPath(dir), []byte(pid), 0o600)
 }
 
-// removePID deletes the daemon PID file, ignoring any error.
-func removePID(dir string) { _ = os.Remove(pidPath(dir)) }
+// removePID deletes the daemon PID and start files, ignoring any error.
+func removePID(dir string) {
+	_ = os.Remove(pidPath(dir))
+	_ = os.Remove(startPath(dir))
+}
