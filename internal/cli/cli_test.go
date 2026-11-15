@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -516,5 +518,59 @@ func TestNormalizeEndpointAndRegion(t *testing.T) {
 		if got := regionFromEndpoint(in); got != want {
 			t.Errorf("regionFromEndpoint(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestInitPipedSecretStaysInOrder guards the shared-reader design: the secret
+// must be read from Init's buffered reader when input is piped. A second
+// reader on the same input would see nothing (the first has buffered every
+// line), shifting all later answers by one.
+func TestInitPipedSecretStaysInOrder(t *testing.T) {
+	st, out, err := initAnswers(t, true, "", "https://s3.us-west-004.backblazeb2.com", "us-west-004")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	cfg, _ := st.GetConfig(context.Background())
+	if cfg.KeyID != "0001keyid" || cfg.AppKey != "K001-secret" || cfg.Bucket != "my-bucket" ||
+		cfg.Region != "us-west-004" {
+		t.Errorf("answers out of order: %+v", cfg)
+	}
+	if !strings.Contains(out, "Backblaze applicationKey (secret, input hidden): ") {
+		t.Errorf("secret prompt should say input is hidden: %q", out)
+	}
+	if strings.Contains(out, "K001-secret") {
+		t.Errorf("secret must never be written to output: %q", out)
+	}
+}
+
+// TestInitInputEndsAtSecret: input that stops right after the keyID is
+// "no input", not a blank-field error.
+func TestInitInputEndsAtSecret(t *testing.T) {
+	st := newStore(t)
+	err := Init(context.Background(), st, strings.NewReader("0001keyid\n"), &bytes.Buffer{}, nil)
+	if !errors.Is(err, apperr.ErrNoInput) {
+		t.Fatalf("want ErrNoInput, got %v", err)
+	}
+}
+
+func TestReadSecretFromAndEOF(t *testing.T) {
+	r := bufio.NewReader(strings.NewReader("  s3cret  \nnext\nlast"))
+	var out bytes.Buffer
+	if s, err := readSecretFrom("P: ", r, nil, &out); s != "s3cret" || err != nil {
+		t.Errorf("first = %q, %v", s, err)
+	}
+	if line, _ := r.ReadString('\n'); line != "next\n" {
+		t.Errorf("reader desynced: next line = %q", line)
+	}
+	// A final answer without a newline is returned together with io.EOF.
+	if s, err := readSecretFrom("P: ", r, nil, &out); s != "last" || !errors.Is(err, io.EOF) {
+		t.Errorf("last = %q, %v; want last, io.EOF", s, err)
+	}
+	if out.String() != "P: P: " {
+		t.Errorf("prompts = %q", out.String())
+	}
+	// readSecret (used by `bb appkey`) treats EOF after an answer as success.
+	if s, err := readSecret("Q: ", strings.NewReader("tail-no-newline"), &bytes.Buffer{}); s != "tail-no-newline" || err != nil {
+		t.Errorf("readSecret = %q, %v", s, err)
 	}
 }

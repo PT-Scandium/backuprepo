@@ -395,3 +395,24 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ The README's "leave endpoint/region blank" advice now produces a working config; the Windows quick start's `bb backend b2` step becomes a check.
 - ⚠️ `rm` output text changed (`deleted (remote) …` + summary) — scripts grepping `^deleted ` still match the prefix, but exact-line matches would not.
 - ⚠️ Re-running `init` with blank endpoint/region on an existing S3 setup switches it to `b2` (announced in the output).
+
+### ADR-022: `bb init` reads the applicationKey without echo, through its shared reader (2026-11-15)
+
+**Context:**
+- ADR-016 made `bb appkey` no-echo, but `bb init` still read the applicationKey with its plain line prompt, so the secret appeared on screen and in scrollback during first-time setup (observed in real use; logged as a v1.0.5 follow-up).
+- `Init` reads all answers through one `bufio.Reader`. The existing `readSecret(prompt, in, out)` builds its own reader, which on piped input finds nothing (the first reader has already buffered every line) and shifts every later answer.
+
+**Decision:**
+- New `cli.readSecretFrom(prompt, r *bufio.Reader, in, out)`: if `in` is an `*os.File` terminal (and `r.Buffered() == 0`), read via `readHidden` → `term.ReadPassword` (no echo); otherwise read the next line from `r`. On piped input it returns `io.EOF` with whatever was read, so `Init` keeps its input-ended detection (`ErrNoInput`). `readSecret` (used by `appkey`) is now a wrapper that treats EOF-after-answer as success.
+- The `r.Buffered() == 0` check is **defensive**: a canonical-mode terminal returns one line per `read()`, so `r` almost never holds typeahead there (pasting all answers at once still goes through `ReadPassword`, in order — verified on a pty). If bytes ever are buffered, they're read from `r` rather than skipped.
+- **Ctrl-C at the hidden prompt** (review finding S1): `term.ReadPassword` restores echo in a `defer` that never runs if SIGINT kills the process, leaving the terminal/console not echoing. `readHidden` saves `term.GetState`, and on `os.Interrupt` during the read restores it and exits 130 (the blocked `read()` can't be cancelled). Also fixes the same latent issue in `bb appkey`, and restores the Windows console mode.
+
+**Alternatives Considered:**
+- Call `readSecret(…, in, out)` from `Init` → Rejected: desyncs piped answers (second buffered reader).
+- Drop the shared reader and read the fd byte-by-byte everywhere → Rejected: more code, and tests drive `Init` with `strings.Reader`.
+
+**Consequences:**
+- ✅ The **terminal path is verified only by a manual pty check** (Python `pty` driving a scratch `cli.Init` harness; no automated test, because test hooks would need package-level state): keyID echoed, secret hidden and stored in full (20/20 chars); old code printed the secret; Ctrl-C → exit 130 with echo restored (was: killed, echo left off); paste-ahead → answers in order. Unit tests cover the **piped** path: answer ordering (a mutation calling `readSecret` from Init fails `TestInitPipedSecretStaysInOrder`), EOF handling, and `readSecret`.
+- ⚠️ A pasted multi-line block that includes the secret is still shown (echoed by the terminal at paste time) — unavoidable without raw-mode input.
+- ⚠️ On a Unix terminal, **Ctrl-D at the hidden prompt is ignored** (x/term returns `(0, nil)` on tty EOF and keeps reading), so it does not produce `ErrNoInput`; that error remains a non-interactive-stdin signal (ADR-021). Same as `bb appkey` before.
+- ⚠️ `bb appkey`: an `io.EOF` from the terminal read (possible on Windows) now yields "empty applicationKey" instead of a bare EOF error; non-EOF errors from piped reads are now returned instead of ignored. Windows console behaviour is vetted/built, not run.
