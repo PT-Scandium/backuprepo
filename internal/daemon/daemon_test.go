@@ -132,3 +132,32 @@ func TestWritePIDRefusesWhenRunning(t *testing.T) {
 	}
 	removePID(dir)
 }
+
+// TestRunningPID covers the liveness probe `bb service install` uses to detect a
+// daemon started outside systemd: missing, corrupt and stale PID files are all
+// "not running"; a PID file naming a live process is "running".
+func TestRunningPID(t *testing.T) {
+	dir := t.TempDir()
+	if _, ok := RunningPID(dir); ok {
+		t.Fatal("no pid file: want not running")
+	}
+	if err := os.WriteFile(pidPath(dir), []byte("garbage"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := RunningPID(dir); ok {
+		t.Fatal("corrupt pid file: want not running")
+	}
+	if err := os.WriteFile(pidPath(dir), []byte("0"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := RunningPID(dir); ok {
+		t.Fatal("pid 0: want not running")
+	}
+	if err := writePID(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer removePID(dir)
+	if pid, ok := RunningPID(dir); !ok || pid != os.Getpid() {
+		t.Fatalf("live pid file: got (%d, %v), want (%d, true)", pid, ok, os.Getpid())
+	}
+}

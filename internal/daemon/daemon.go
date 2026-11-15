@@ -283,6 +283,20 @@ func Stop(dir string, out io.Writer) error {
 	return nil
 }
 
+// RunningPID reports the PID of a live daemon recorded in dir's PID file.
+// A missing, corrupt, or stale (dead process) PID file reports false.
+func RunningPID(dir string) (int, bool) {
+	data, err := os.ReadFile(pidPath(dir))
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 || !processAlive(pid) {
+		return 0, false
+	}
+	return pid, true
+}
+
 // pidPath returns the daemon PID file path within dir.
 func pidPath(dir string) string { return filepath.Join(dir, "daemon.pid") }
 

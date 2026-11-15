@@ -180,23 +180,27 @@ bb stop             # turn it OFF: signal the running daemon to shut down gracef
 
 `bb start` *is* daemon mode: it watches your folders via filesystem events (`fsnotify`) for near-real-time backups, plus a full scan every 5 minutes as a safety net for anything the event stream misses. It runs in the **foreground** (you see activity; `Ctrl-C` stops it).
 
-To keep the daemon running in the background and across logins, use your OS service manager — e.g. a **systemd user unit** on Linux:
-
-```ini
-# ~/.config/systemd/user/backuprepo.service
-[Unit]
-Description=backuprepo daemon
-[Service]
-ExecStart=%h/.local/bin/bb start
-Restart=on-failure
-[Install]
-WantedBy=default.target
-```
+**Run it automatically in the background (Linux, systemd) — `bb service install`:**
 
 ```sh
-systemctl --user enable --now backuprepo    # start now and on every login
-systemctl --user stop backuprepo            # stop it
+make install                       # put bb at ~/.local/bin/bb first (the service runs that binary)
+bb init                            # once: credentials + bucket (the service can't prompt)
+bb service install                 # watch ~/Documents, then install + enable + start the service
+bb service install --folder ~/Work # ...or watch a different folder (repeat to add more folders)
+bb service status                  # installed? enabled? running?
+journalctl --user -u backuprepo -f # follow the daemon's log
+bb service uninstall               # stop, disable and remove it (watched folders are kept)
 ```
+
+`bb service install` adds the folder to the watch list (default **`~/Documents`**; it must exist), writes a **systemd user unit** at `~/.config/systemd/user/backuprepo.service` that runs `bb start`, and runs `systemctl --user daemon-reload`, `enable` and `restart`. From then on the daemon starts at every login and backs up changes automatically. Pass `--delete` to bake deletion propagation into the service (see below).
+
+- **After logout / at boot:** user services run only while you're logged in. To keep backing up after logout and start at boot, run once: `loginctl enable-linger $USER`.
+- **Adding folders later:** the daemon reads the watch list at startup, so after `bb watch <dir>` run `systemctl --user restart backuprepo` (or `bb service install --folder <dir>`, which does both).
+- **Safety:** all checks run before the watch list or unit file is touched (only a later `systemctl` failure can leave the folder added). Install refuses if a daemon you started by hand (`bb start`) is running (`bb stop` it first), won't overwrite a hand-written `backuprepo.service` unless you pass `--force`, and refuses `--delete` while any watched folder is stored as a relative path (under systemd it would resolve against `$HOME`). After starting the unit it checks the daemon is still running and fails with a pointer to `journalctl` if not.
+- **If the unit keeps failing** at startup, systemd gives up after 5 starts within 10 minutes and leaves it `failed` (`bb service status`). Fix the cause, then re-run `bb service install` (it clears the failed state) or `systemctl --user reset-failed backuprepo && systemctl --user restart backuprepo`.
+- Run `bb service install` from the installed binary, not `go run` — the unit records the absolute path of the `bb` that installed it.
+
+Elsewhere (Windows, macOS), use the OS service manager to run `bb start`.
 
 For a quick one-off detached run instead: `nohup bb start &`. Either way, only **one** daemon runs at a time (guarded by `~/backup_repo/daemon.pid`); `bb stop` (or `systemctl --user stop`) ends it.
 
