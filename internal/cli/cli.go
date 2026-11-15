@@ -6,10 +6,12 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -43,11 +45,19 @@ func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer, lis
 		return strings.TrimSpace(line)
 	}
 
-	cfg := store.RemoteConfig{
-		KeyID:  ask("Backblaze keyID (access key ID)"),
-		AppKey: ask("Backblaze applicationKey (secret)"),
-		Bucket: ask("Bucket name"),
+	var cfg store.RemoteConfig
+	cfg.KeyID = ask("Backblaze keyID (access key ID)")
+	// The secret is read without echo on an interactive terminal; from the same
+	// buffered reader otherwise, so piped answers stay in order.
+	appKey, err := readSecretFrom("Backblaze applicationKey (secret, input hidden): ", r, in, out)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return err
 	}
+	if err != nil {
+		inputEnded = true
+	}
+	cfg.AppKey = appKey
+	cfg.Bucket = ask("Bucket name")
 	if cfg.KeyID == "" || cfg.AppKey == "" || cfg.Bucket == "" {
 		// With no interactive stdin (e.g. `! bb init` in an agent shell, or
 		// </dev/null) every prompt reads EOF; say so instead of blaming the user.
@@ -363,17 +373,62 @@ func regionFromEndpoint(endpoint string) string {
 // reads a single line. This keeps `pass show … | bb appkey` and the unit tests
 // working while hiding the secret during interactive entry.
 func readSecret(prompt string, in io.Reader, out io.Writer) (string, error) {
-	fmt.Fprint(out, prompt)
-	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		b, err := term.ReadPassword(int(f.Fd()))
-		fmt.Fprintln(out) // ReadPassword swallows the Enter keypress; emit the newline
-		if err != nil {
-			return "", err
-		}
-		return strings.TrimSpace(string(b)), nil
+	s, err := readSecretFrom(prompt, bufio.NewReader(in), in, out)
+	if errors.Is(err, io.EOF) {
+		err = nil // a final line without a newline (or empty input) is still an answer
 	}
-	line, _ := bufio.NewReader(in).ReadString('\n')
-	return strings.TrimSpace(line), nil
+	return s, err
+}
+
+// readSecretFrom is readSecret for callers that read several answers through
+// one buffered reader r wrapping in (e.g. Init). On an interactive terminal it
+// reads without echo; otherwise it reads the next line from r, so piped
+// answers stay in order (a second reader on in would find them already
+// buffered by r). The r.Buffered() check is defensive: a canonical-mode
+// terminal returns one line per read, so r rarely holds typeahead there, but
+// if it does, those bytes must be read from r rather than skipped.
+// A piped read that reaches end of input returns io.EOF with whatever was read.
+// On a terminal, x/term ignores Ctrl-D, so io.EOF comes only from piped input.
+func readSecretFrom(prompt string, r *bufio.Reader, in io.Reader, out io.Writer) (string, error) {
+	fmt.Fprint(out, prompt)
+	if f, ok := in.(*os.File); ok && r.Buffered() == 0 && term.IsTerminal(int(f.Fd())) {
+		return readHidden(int(f.Fd()), out)
+	}
+	line, err := r.ReadString('\n')
+	return strings.TrimSpace(line), err
+}
+
+// readHidden reads one line from terminal fd without echo. term.ReadPassword
+// restores echo in a defer, which never runs if Ctrl-C kills the process
+// mid-read — leaving the user's terminal (or Windows console) not echoing.
+// So while the read is in progress, an interrupt restores the saved terminal
+// state and exits with the conventional 130; the blocked read() cannot be
+// cancelled, so exiting is the only way out.
+func readHidden(fd int, out io.Writer) (string, error) {
+	if state, err := term.GetState(fd); err == nil {
+		sig := make(chan os.Signal, 1)
+		done := make(chan struct{})
+		signal.Notify(sig, os.Interrupt)
+		go func() {
+			select {
+			case <-sig:
+				_ = term.Restore(fd, state)
+				fmt.Fprintln(out)
+				os.Exit(130)
+			case <-done:
+			}
+		}()
+		defer func() {
+			signal.Stop(sig)
+			close(done)
+		}()
+	}
+	b, err := term.ReadPassword(fd)
+	fmt.Fprintln(out) // ReadPassword swallows the Enter keypress; emit the newline
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // mask returns the secret with all but its last four characters hidden.

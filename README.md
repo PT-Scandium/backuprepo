@@ -112,7 +112,7 @@ In the [Backblaze B2 console](https://secure.backblaze.com/b2_buckets.htm):
 ```text
 $ bb init
 Backblaze keyID (access key ID): 0001abcdef0123456789
-Backblaze applicationKey (secret): K001-XXXXXXXXXXXXXXXXXXXXXXXXXXX
+Backblaze applicationKey (secret, input hidden):
 Bucket name: my-backups
 Bucket ID (for native B2 API): e73ede9969c64827
 S3 endpoint URL (e.g. https://s3.us-west-004.backblazeb2.com; blank = native B2 API only): s3.us-west-004.backblazeb2.com
@@ -123,7 +123,7 @@ Folder to watch (blank to skip): /home/me/Documents
 Watching /home/me/Documents
 ```
 
-- Only the **applicationKey** is secret. Re-run `init` anytime to reconfigure — it overwrites the saved config.
+- Only the **applicationKey** is secret, and it is **not shown as you type** (paste it and press Enter — nothing appears). Re-run `init` anytime to reconfigure — it overwrites the saved config.
 - **Endpoint shortcuts:** paste the endpoint exactly as the Buckets page shows it (`https://` is added for you) and leave **region** blank — it's derived from `s3.<region>.backblazeb2.com`.
 - **Using only the native B2 backend?** Leave **endpoint** and **region** blank: `init` then switches to the `b2` backend automatically (it needs the bucket ID, which is usually resolved for you). With neither an endpoint nor a bucket ID, `init` refuses rather than save a config that can't upload. (Required: keyID, applicationKey, bucket name.)
 - **Run `init` in a real terminal.** With no interactive input (e.g. `bb init </dev/null`, or a `!` shell inside an AI agent), it stops with `error: bb: input ended before setup was complete (run `bb init` in an interactive terminal)`.

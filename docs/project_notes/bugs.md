@@ -60,6 +60,12 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 - **Solution (v1.0.5)**: prompt names the bucket and says local files are not affected; lines read `deleted (remote) <key>`; recursive rm ends with `Deleted N object(s) from bucket "<name>". Local files were not touched.`; a mid-batch failure reports how many were already deleted. Tests: `TestRmOutputSaysRemote`, `TestRmRecursiveReportsPartialFailure`.
 - **Prevention**: Destructive commands must say *where* they act.
 
+### 2026-11-15 - `bb init` showed the applicationKey on screen
+- **Issue**: During `bb init` the applicationKey prompt echoed the secret as typed (into terminal scrollback), unlike `bb appkey` (ADR-016).
+- **Root Cause**: `Init` read the secret with the same plain `ask` line prompt as the other answers; reusing `readSecret` wasn't possible because it creates a second buffered reader that desyncs piped input.
+- **Solution**: `readSecretFrom` reads without echo on a terminal, else from Init's shared reader (ADR-022); `readHidden` restores the terminal and exits 130 on Ctrl-C (review found echo was left off). Unit tests cover the piped path (`TestInitPipedSecretStaysInOrder`, `TestInitInputEndsAtSecret`, `TestReadSecretFromAndEOF`); the terminal path is verified by a manual pty check (old vs new, Ctrl-C).
+- **Prevention**: Any prompt for a secret goes through the no-echo helper; anything that changes terminal modes must restore them on interrupt.
+
 Candidates that were caught during the build review (not bugs, but worth knowing — see decisions.md):
 - Root `errors.go` from the spec was infeasible (Go forbids `internal/` importing package `main`) → typed errors moved to `internal/apperr` (ADR-005).
 - SQLCipher requires CGO, conflicting with the static-binary goal → switched to pure-Go SQLite + AES-GCM field encryption (ADR-001).
