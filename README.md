@@ -275,6 +275,7 @@ The applicationKey is masked (last 4 characters); the keyID is just an identifie
 | `bb` (no args) | Same as `status` |
 | `bb init` | Interactive setup (credentials, bucket name + ID, endpoint, region, optional first folder) |
 | `bb config` | Show current configuration (app key masked) |
+| `bb buckets` | List all buckets the key can see, with their IDs (native B2 API) |
 | `bb bucket [<name> [<id>]]` | Show, or switch to another bucket — changes only the bucket name + ID (keeps credentials/endpoint/region) |
 | `bb appkey [<new-keyID>]` | Replace the stored application key — reads the secret from **stdin** (kept out of shell history); pass a new keyID to rotate the whole pair |
 | `bb watch <dir>` | Add an existing directory to the watch list |
@@ -285,12 +286,16 @@ The applicationKey is masked (last 4 characters); the keyID is just an identifie
 | `bb start [--delete]` | Run the watcher daemon (fsnotify + 5-min fallback scan) in the foreground until stopped |
 | `bb stop` | Signal a running daemon to shut down gracefully |
 | `bb serve` | Start the localhost web UI on `http://127.0.0.1:9171` (foreground) |
+| `bb service install [--folder DIR] [--delete] [--force]` | Linux: watch DIR (default `~/Documents`), then install, enable and start the daemon as a systemd user service |
+| `bb service uninstall` | Stop, disable and remove the service (watched folders are kept) |
+| `bb service status` | Show whether the service is installed, enabled and running |
 | `bb backend [s3\|b2]` | Show or set the stored backend |
 | `bb ls [path] [-r]` | List bucket contents (folders shown with trailing `/`) |
 | `bb get <remote> [local] [-r]` | Download an object, or a prefix with `-r` |
 | `bb put <local> [remote] [-r]` | Upload a file, or a directory with `-r` |
 | `bb rm <path> [-r] [-f]` | Delete an object/prefix **in the bucket** (local files untouched); confirms unless `-f`/`-y` |
 | `bb find <query> [prefix]` | Case-insensitive substring search of object names |
+| `bb version` | Print the version (also `--version`, `-v`) |
 | `bb help` | Print usage |
 
 Every file command also accepts `--backend s3|b2` to override the stored backend for that one invocation. Exit codes: `0` success, `1` error (message on stderr).
@@ -345,7 +350,11 @@ Two buttons at the bottom: **Upload changed files** (runs a backup now) and **Cl
 
 ## Roadmap
 
-Feature-complete against the original spec. Design notes live in `docs/superpowers/`. The remaining possible enhancement (not blocking) is a leaner binary; graceful Windows `bb stop` and no-echo `bb appkey` entry are now implemented.
+Feature-complete against the original spec; current release **v1.0.8**. Design notes live in `docs/superpowers/`, decisions in `docs/project_notes/decisions.md`. Possible next steps (none blocking):
+
+- A Windows CI job (`go test ./...` on `windows-latest`) — the Windows-specific daemon and path code is compiled and vetted but not yet run on Windows.
+- A leaner binary (~22 MB today).
+- Minor Windows path-case edge cases (web-UI delete prefix check; per-directory case sensitivity).
 
 ---
 

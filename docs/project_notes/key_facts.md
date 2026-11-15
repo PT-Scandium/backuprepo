@@ -22,11 +22,13 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
 - **Source of truth:** the root `VERSION` file (e.g. `1.0.0`). It is **embedded into the binary** via `//go:embed` in `main.go`; `bb version` (`--version`/`-v`) prints it. Released as git tag `v<VERSION>` (e.g. `v1.0.0`) — first release tagged 2026-06-16.
 - **Scheme** (`internal/version`, odometer): `major.minor.patch`, each component `0..20`; incrementing past 20 wraps to 0 and carries into the next-higher component — `1.0.20 → 1.1.0`, `1.20.20 → 2.0.0`. **Major is the top component and unbounded.** Fully unit-tested.
 - **Bump:** `make bump` (patch, with carry), `make bump-minor`, `make bump-major` — or `go run ./cmd/bump [major|minor|patch]`. The tool rewrites `VERSION`; rebuild to bake the new value into the binary.
+- **Current release: v1.0.8** (2026-11-15). **Release process:** feature branch → independent review → `--no-ff` merge to `master` → `chore: bump version to X` → annotated tag `vX` (`vX — <summary>`) → GitHub release (`gh release create vX --verify-tag --latest`) with `bb-vX-linux-amd64`, `bb-vX-windows-amd64.exe`, `SHA256SUMS`, built from the tag with `CGO_ENABLED=0 -trimpath -ldflags="-s -w"` → `docs: vX — README links + notes` → install the published Linux asset to `~/.local/bin/bb` (a local rebuild differs: Go embeds `vcs.revision`).
 
 ### Local state layout (`~/backup_repo/`)
 
 - `backup.db` — SQLite (`modernc.org/sqlite`); credential fields AES-256-GCM encrypted; tables: `config` (single row), `folders`, `files`
 - `key` — 32-byte random master key, mode `0600`, created on first run
+- `daemon.pid` — running daemon's PID (bare number, readable by every version); `daemon.start` — `<pid> <starttime>` on Linux/Windows for PID-reuse protection (ADR-023/024). Both removed on clean shutdown.
 
 ### Constants
 

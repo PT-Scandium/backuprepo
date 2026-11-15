@@ -190,3 +190,13 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 - **Status**: Completed on branch `fix/windows-followups`; released as **v1.0.8**
 - **Description**: Windows `procStartTime` via `GetProcessTimes` (same `daemon.start` scheme as Linux); Windows `processAlive` requires exit code `STILL_ACTIVE`; folder matching is case-insensitive on Windows (path-only); PIDs > 2^32-1 rejected as corrupt. See ADR-024, bugs.md.
 - **Notes**: Independent review: one blocker (B1) — my extra `os.SameFile` matching hid a real folder behind a stored symlink (silent backup gap); removed it (also fixes S1 ReFS file-ID collisions, S3, N7 stat hangs) and added a regression test. Also fixed S4 (Windows test now proves EqualFold, incl. after removal), N1–N3, N8. Linux: full suite, vet (linux/windows/darwin), gofmt clean; cli 74.2%, daemon 57.4%. **Windows code not executed** (no Windows/Wine/CI) — Windows test binaries compile. Follow-ups: Windows CI job (`windows-latest`, `go test ./...`); web delete exact-case prefix check on Windows (N5); NTFS upcase/per-dir case sensitivity (N6).
+
+### 2026-11-15 - Session wrap-up: open follow-ups (v1.0.8)
+- **Status**: Open (none blocking)
+- **Description**: After v1.0.4–v1.0.8 (service, init/rm polish, no-echo init secret, watch/PID/unknown-command fixes, Windows PID identity + case-insensitive folders):
+  - **Windows CI job** (`windows-latest`, `go test ./...`) — Windows-specific code (ADR-016/024) has only been compiled/vetted, never executed.
+  - Web UI delete (`web.deletePath`) uses an exact-case prefix check while `resolveWatched` is case-insensitive on Windows (crafted-POST only).
+  - Windows per-directory case sensitivity / NTFS upcase table not honoured by folder matching.
+  - `/verify` tests lane is INCOMPLETE without a `.gstack/pregate.json` (full `go test ./...` is run manually instead).
+  - Leaner binary (~22 MB).
+- **Notes**: User's machine: `~/.local/bin/bb` = published v1.0.8 asset; configured (`b2` backend), no watched folders, service not installed; old bucket `Rent-Contract-MDTM` emptied for deletion on backblaze.com.

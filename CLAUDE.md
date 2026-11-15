@@ -112,23 +112,27 @@ This repository is feature-complete against the spec above (see Implementation s
 
 ## Build/Test/Lint Commands
 
-- Build: `go build -ldflags="-s -w" -o backuprepo .` (Go 1.25+, no CGO)
+- Build: `make` → `./bb` (`make install` → `~/.local/bin/bb`), or `go build -ldflags="-s -w" -o bb .` (Go 1.25+, no CGO)
 - Test: `go test ./...`
 - Vet/format: `go vet ./...` and `gofmt -l .`
 
 ## Implementation status (read before relying on the spec above)
 
-The spec above is the original aspirational design. **As of 2026-06-16 the project is feature-complete against this spec** — everything below is implemented and merged to `master` (Go packages under `internal/{apperr,crypto,config,store,b2,backup,daemon,web,cli}` + `main.go`):
+The spec above is the original aspirational design. **The project has been feature-complete against this spec since 2026-06-16; current release: v1.0.8 (2026-11-15)** — everything below is implemented and merged to `master` (Go packages under `internal/{apperr,crypto,config,store,b2,backup,daemon,web,cli,service,version}` + `main.go`):
 
-- **Core CLI** — `init`, `watch`, `unwatch`, `list`, `status`, `upload`, `config`.
+- **Core CLI** — `init`, `watch`, `unwatch`, `list`, `status`, `upload`, `config`, `version`. Watched folders are stored as absolute paths (`~` expanded; case-insensitive matching on Windows); unknown commands, `version` and `help` never create `~/backup_repo` (ADR-021/023/024).
 - **Dual backend** — `S3Backend` (aws-sdk) and a **native `B2Backend`** (B2 **v3** API over stdlib `net/http`) behind a unified `b2.Backend` interface. Switch with `bb backend [s3|b2]` (default `s3`) or per-command `--backend s3|b2`.
 - **Manual bucket commands** — `ls`, `get`, `put`, `rm`, `find`, `backend`.
-- **Partial reconfig (no full `init`)** — `bucket [<name> [<id>]]` switches the destination bucket; `appkey [<new-keyID>]` rotates the application key (secret read from stdin, never argv).
-- **Background daemon** — `start` / `stop`: real-time `fsnotify` watcher + 1s/5s debounce + 5-minute fallback scan, PID-file lifecycle. **Runs on Linux and Windows** (OS-specific signal/stop logic in build-tagged `internal/daemon/signals_{unix,windows}.go`; Windows `stop` is forceful).
+- **Setup** — `init` reads the applicationKey without echo, picks the `b2` backend when no S3 endpoint/region is given, and fails clearly without an interactive terminal (ADR-021/022). `buckets` lists buckets; the bucket ID is auto-resolved from the name (ADR-017).
+- **Partial reconfig (no full `init`)** — `bucket [<name> [<id>]]` switches the destination bucket; `appkey [<new-keyID>]` rotates the application key (secret read from stdin, never argv; no echo).
+- **Background daemon** — `start` / `stop`: real-time `fsnotify` watcher + 1s/5s debounce + 5-minute fallback scan, PID-file lifecycle (`daemon.pid` + `daemon.start` start-time identity on Linux/Windows, so `stop` never signals a reused PID — ADR-023/024). **Runs on Linux and Windows** (OS-specific logic in build-tagged `internal/daemon/{signals,proc}_*.go`; `stop` is graceful on both — Windows via a named event, ADR-016).
+- **systemd user service (Linux)** — `service install [--folder DIR] [--delete] [--force] | uninstall | status` runs the daemon as `~/.config/systemd/user/backuprepo.service` (default folder `~/Documents`; ADR-020).
 - **Opt-in deletion propagation** — `upload --delete` / `start --delete` removes remote objects whose local files were deleted (off by default; unmounted-folder safety guard).
 - **Web UI (port 9171)** — `serve`: localhost-only (`127.0.0.1`), no auth per spec but with a Host-header + `Origin`/`Referer` CSRF guard, browsing/deletion confined to watched folders; warm-themed folder table, Upload + Close buttons, destructive (local + remote) delete behind a confirm.
 
-Several invariants above were deliberately changed in implementation — see `docs/project_notes/decisions.md` for the authoritative record (ADRs 001–015). Notably: DB uses **pure-Go SQLite + AES-256-GCM field encryption, NOT SQLCipher** (ADR-001); uploads are **per-file, not tar+gzip** (ADR-003); `init` collects **both bucket name and bucket ID** (bucket name for S3 + B2 download, bucket ID for B2 list/upload — ADR-010 supersedes ADR-004); typed errors live in `internal/apperr`, not a root `errors.go` (ADR-005); the daemon adds an `fsnotify` dependency (ADR-012). Remaining items are optional polish only (graceful Windows `stop`, no-echo `appkey` entry, leaner binary).
+Several invariants above were deliberately changed in implementation — see `docs/project_notes/decisions.md` for the authoritative record (ADRs 001–024). Notably: DB uses **pure-Go SQLite + AES-256-GCM field encryption, NOT SQLCipher** (ADR-001); uploads are **per-file, not tar+gzip** (ADR-003); `init` collects **both bucket name and bucket ID** (bucket name for S3 + B2 download, bucket ID for B2 list/upload — ADR-010 supersedes ADR-004); typed errors live in `internal/apperr`, not a root `errors.go` (ADR-005); the daemon adds an `fsnotify` dependency (ADR-012). Remaining items are optional (see `docs/project_notes/issues.md`): a Windows CI job (Windows-specific code is compile/vet-verified only), a leaner binary, and minor Windows path-case edge cases.
+
+**Releasing:** bump with `make bump`, tag `vX.Y.Z` (annotated), publish a GitHub release with `bb-vX-linux-amd64`, `bb-vX-windows-amd64.exe` and `SHA256SUMS` (`CGO_ENABLED=0 -trimpath -ldflags="-s -w"`, built from the tag), then commit the README/Windows-guide download links (`docs: vX — README links + notes`).
 
 ## Project Memory System
 
