@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -280,26 +281,40 @@ func findLegacyRelative(ctx context.Context, st *store.Store, abs string) (strin
 		if filepath.IsAbs(f) {
 			continue
 		}
-		if r, err := filepath.Abs(f); err == nil && r == abs {
+		if r, err := filepath.Abs(f); err == nil && sameFolder(r, abs, runtime.GOOS) {
 			return f, nil
 		}
 	}
 	return "", nil
 }
 
-// findWatched returns the stored watch entry equivalent to abs (equal after
-// cleaning, e.g. "/a/b/" for "/a/b"), or "" if none.
+// findWatched returns the stored watch entry equivalent to abs (same cleaned
+// path; case-insensitive on Windows, e.g. C:\Users\X vs c:\users\x), or ""
+// if none. Matching is by path only — it works for folders that no longer
+// exist, never stats (so a hung network mount can't block it), and never
+// equates a symlink with its target (a symlinked root isn't walked by the
+// backup, so watching the real folder must stay possible).
 func findWatched(ctx context.Context, st *store.Store, abs string) (string, error) {
 	folders, err := st.ListFolders(ctx)
 	if err != nil {
 		return "", err
 	}
 	for _, f := range folders {
-		if filepath.Clean(f) == abs {
+		if sameFolder(filepath.Clean(f), abs, runtime.GOOS) {
 			return f, nil
 		}
 	}
 	return "", nil
+}
+
+// sameFolder compares two cleaned absolute paths as the given OS does:
+// case-insensitively on Windows (NTFS default), exactly elsewhere. macOS
+// volumes may be either, so no folding is guessed there.
+func sameFolder(a, b, goos string) bool {
+	if goos == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }
 
 // List prints watched folders and tracked files with backup state.

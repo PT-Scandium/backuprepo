@@ -438,5 +438,29 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ A stale PID file can no longer block `bb start` or make `bb stop` kill another program (Linux). Tests: `TestReusedPIDIsNotTheDaemon`, `TestStopNeverSignalsReusedPID` (the reused PID is the test process itself, so a regression would kill the test binary), `TestStopSignalsMatchingProcess` (real child `sleep` is SIGTERMed), `TestStartFileForOtherPIDIgnored`, `TestParseStatStartTime`, `TestLegacyPIDFileStillRecognised`; `TestWritePIDRecordsStartTime` asserts `daemon.pid` is still parseable by older versions. Manually: a v1.0.6 binary's `bb stop` correctly stopped a process recorded by the new layout.
 - ⚠️ Tiny race: `Stop` may delete the files of a daemon that starts in the instant between its liveness check and the removal (same class as the existing read-check-write race in `writePID`).
 - ✅ `bb watch docs/` / `~/Documents` store absolute paths; `bb unwatch` accepts any spelling. Tests in `cli_test.go`; sandboxed CLI run confirmed.
-- ⚠️ **macOS and Windows keep the old PID behaviour** (no start time recorded → signal-0 / `FindProcess` liveness). Windows `stop` falls back to `proc.Kill` if the named event can't be opened, so PID reuse there could still hit another process — process creation time via `GetProcessTimes` would fix it (follow-up).
+- ⚠️ **macOS and Windows keep the old PID behaviour** _(Windows superseded by ADR-024)_ (no start time recorded → signal-0 / `FindProcess` liveness). Windows `stop` falls back to `proc.Kill` if the named event can't be opened, so PID reuse there could still hit another process — process creation time via `GetProcessTimes` would fix it (follow-up).
 - ⚠️ Not exercised with a live `bb start` (would contact Backblaze); `writePID`/`Stop` are unit-tested.
+
+### ADR-024: Windows PID identity via creation time; case-insensitive / same-directory folder matching (2026-11-15)
+
+**Context:**
+- ADR-023 left two Windows gaps: no process start time (so a reused PID could still be treated as the daemon — and Windows `bb stop` falls back to `proc.Kill`), and case-sensitive folder matching (`C:\Users\X` vs `c:\users\x` → duplicate entry, double upload).
+- Found while doing it: Windows `processAlive` = "`os.FindProcess` succeeded", but a Windows process object outlives the process while any handle to it is open, so an exited daemon could look alive.
+
+**Decision:**
+- `proc_windows.go`: `procStartTime` = creation time from `GetProcessTimes` (opened with `PROCESS_QUERY_LIMITED_INFORMATION`), formatted in 100 ns units — the same `daemon.start` mechanism as Linux (ADR-023). `proc_other.go` now covers only `!linux && !windows` (macOS).
+- Windows `processAlive`: `OpenProcess` + `GetExitCodeProcess == STILL_ACTIVE (259)` (constant declared locally; not in x/sys). No new dependency (`golang.org/x/sys/windows` already direct, ADR-016).
+- Folder matching (`cli.findWatched`, `findLegacyRelative`): entries match if their cleaned paths are equal — `strings.EqualFold` on Windows (`sameFolder`, OS passed in for testability). **Path-only**: works for folders that no longer exist (so `unwatch` of a deleted folder works), never stats, and never equates a symlink with its target.
+- `readPIDFile` rejects PIDs above `math.MaxUint32` (they would wrap to an unrelated PID in Windows' uint32 process APIs).
+
+**Alternatives Considered:**
+- Fold case on macOS too → Rejected: APFS can be case-sensitive, so case-insensitive macOS volumes keep exact matching (same as before).
+- Also match by `os.SameFile` (first draft) → **Rejected after review**: (B1) a stored symlink root isn't descended by `filepath.WalkDir`, so it backs up nothing — and SameFile then answered "Already watching <link>" to `bb watch <real>`, blocking the workaround (silent backup gap); (S1) Windows file IDs aren't guaranteed unique on ReFS / some redirectors, so two folders could be equated and `unwatch` could remove the wrong one; plus a stat of every stored folder could hang on a dead network mount.
+- Windows: verify the image name (`QueryFullProcessImageName`) is bb → Rejected for the same reasons as `/proc/<pid>/exe` in ADR-023 (binary replaced on upgrade; names vary).
+
+**Consequences:**
+- ✅ PID-reuse protection (start/stop never act on another program) now on Linux and Windows; exited-but-referenced Windows processes are no longer "alive".
+- ✅ No duplicate watch entries from case differences on Windows. Regression test `TestWatchRealFolderWhenSymlinkStored` keeps symlink and target distinct (B1).
+- ⚠️ **Windows code was not executed** — no Windows machine/Wine/CI here. Verified only by `GOOS=windows go vet`, compiling the Windows test binaries (`go test -c`) and review against Win32 docs. On a Windows `go test`, the Windows-only tests (`proc_windows_test.go`: creation time, exited-but-referenced process not alive; `cli_windows_test.go`: case-insensitive watch/unwatch incl. after the folder is removed) run, and the shared start-time tests (`TestWritePIDRecordsStartTime`, `TestReusedPIDIsNotTheDaemon`, `TestStopNeverSignalsReusedPID` — which would kill the test binary on regression — and `TestStopSignalsMatchingProcess` if `sleep` is on PATH) stop skipping.
+- ⚠️ `STILL_ACTIVE` (259) is ambiguous for a process that genuinely exits with code 259 — benign here (PID not reused while a handle is open, and start-time check still applies).
+- Follow-ups: web UI delete uses an exact-case prefix check (`web.deletePath`) though `resolveWatched` is case-insensitive on Windows — a mixed-case path could delete locally but leave remote objects/records (old code, only via a crafted POST past the CSRF guard); `EqualFold` ≠ NTFS upcase table and Windows per-directory case-sensitivity isn't honoured; a Windows CI job would close the execution gap.

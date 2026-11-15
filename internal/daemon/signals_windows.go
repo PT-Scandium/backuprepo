@@ -65,14 +65,22 @@ func installStopWatcher(_ context.Context) (<-chan struct{}, func(), error) {
 	return ch, cleanup, nil
 }
 
-// processAlive reports whether pid refers to a running process. On Windows
-// os.FindProcess opens the process handle and returns an error if it does not
-// exist, so a successful lookup is a sufficient liveness signal.
+// stillActive is the exit code GetExitCodeProcess reports for a process that
+// has not exited (STILL_ACTIVE / STATUS_PENDING, 259; not defined in x/sys).
+const stillActive = 259
+
+// processAlive reports whether pid refers to a running process. A Windows
+// process object outlives the process while any handle to it is open, so
+// opening it is not enough: its exit code must still be STILL_ACTIVE.
 func processAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
 		return false
 	}
-	_ = proc.Release()
-	return true
+	defer windows.CloseHandle(h)
+	var code uint32
+	if err := windows.GetExitCodeProcess(h, &code); err != nil {
+		return false
+	}
+	return code == stillActive
 }

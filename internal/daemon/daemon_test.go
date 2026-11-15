@@ -253,7 +253,8 @@ func TestStartFileForOtherPIDIgnored(t *testing.T) {
 }
 
 // TestStopSignalsMatchingProcess covers Stop's success path: with a PID and
-// matching start time it sends SIGTERM to that process (a child `sleep` here).
+// matching start time it stops that process (a child `sleep` here) — SIGTERM
+// on Unix; on Windows the named stop event, else TerminateProcess.
 func TestStopSignalsMatchingProcess(t *testing.T) {
 	ownStart(t) // skip where start times are unavailable
 	sleepBin, err := exec.LookPath("sleep")
@@ -293,7 +294,7 @@ func TestStopSignalsMatchingProcess(t *testing.T) {
 	select {
 	case err := <-done:
 		if err == nil {
-			t.Error("child exited cleanly; expected termination by SIGTERM")
+			t.Error("child exited cleanly; expected it to be terminated")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("child still running 5s after Stop")
