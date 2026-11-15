@@ -67,9 +67,9 @@ Install, log in, and upload — using the **native B2 backend** (no S3 endpoint 
 | 8 | Start setup | `bb init` |
 | 9 | Answer the credential prompts | Paste **keyID** → **Enter**, paste **applicationKey** → **Enter**, type **bucket name** → **Enter** |
 | 10 | Bucket ID | Resolved automatically. If it still asks, paste the **Bucket ID** from the B2 console → **Enter** |
-| 11 | Skip the two S3 prompts | Press **Enter** on *S3 endpoint URL* and again on *S3 region* — unused by the B2 backend |
+| 11 | Skip the two S3 prompts | Press **Enter** on *S3 endpoint URL* and again on *S3 region* — `init` then selects the B2 backend for you |
 | 12 | Folder to watch | Press **Enter** to skip (add it later with `bb watch`) |
-| 13 | Select the B2 backend | `bb backend b2` — required, since the stored default is `s3` |
+| 13 | Check the B2 backend | `bb backend` → `b2` (set automatically by step 11 since v1.0.5; on older versions run `bb backend b2`) |
 | 14 | Verify the login works | `bb ls` — lists the bucket; credentials stay saved, so you never log in again |
 | 15 | Upload one file | `bb put C:\Users\you\Documents\report.pdf reports/report.pdf` |
 | 16 | Upload a whole folder | `bb put C:\Users\you\Documents\ documents/ -r` (resume an interrupted run with `--skip-existing`) |
@@ -115,15 +115,18 @@ Backblaze keyID (access key ID): 0001abcdef0123456789
 Backblaze applicationKey (secret): K001-XXXXXXXXXXXXXXXXXXXXXXXXXXX
 Bucket name: my-backups
 Bucket ID (for native B2 API): e73ede9969c64827
-S3 endpoint URL (e.g. https://s3.us-west-004.backblazeb2.com): https://s3.us-west-004.backblazeb2.com
-S3 region (e.g. us-west-004): us-west-004
+S3 endpoint URL (e.g. https://s3.us-west-004.backblazeb2.com; blank = native B2 API only): s3.us-west-004.backblazeb2.com
+S3 region (e.g. us-west-004; blank = derive from endpoint):
+Region: us-west-004 (from endpoint)
 Configuration saved.
 Folder to watch (blank to skip): /home/me/Documents
 Watching /home/me/Documents
 ```
 
 - Only the **applicationKey** is secret. Re-run `init` anytime to reconfigure — it overwrites the saved config.
-- **Using only the native B2 backend?** Leave **endpoint** and **region** blank; they're used by the S3 backend only. (Required: keyID, applicationKey, bucket name. The bucket ID is required for the `b2` backend.)
+- **Endpoint shortcuts:** paste the endpoint exactly as the Buckets page shows it (`https://` is added for you) and leave **region** blank — it's derived from `s3.<region>.backblazeb2.com`.
+- **Using only the native B2 backend?** Leave **endpoint** and **region** blank: `init` then switches to the `b2` backend automatically (it needs the bucket ID, which is usually resolved for you). With neither an endpoint nor a bucket ID, `init` refuses rather than save a config that can't upload. (Required: keyID, applicationKey, bucket name.)
+- **Run `init` in a real terminal.** With no interactive input (e.g. `bb init </dev/null`, or a `!` shell inside an AI agent), it stops with `error: bb: input ended before setup was complete (run `bb init` in an interactive terminal)`.
 - **Stay configured:** credentials persist encrypted on disk, so you never log in interactively again — each command silently re-authorizes with Backblaze using the saved key. You only re-run `init` if the key changes or is revoked.
 - **Switch buckets later:** to point `bb` at a *different* bucket without re-entering credentials, use `bb bucket <name> <id>` (or `bb bucket <name>` for an S3-only bucket). It changes only the bucket name + ID. Note: the stored key must have access to the new bucket — a bucket-scoped key won't, so for a bucket under a different key, re-run `init` instead.
 - **Rotate the application key:** `bb appkey` reads a new applicationKey from **stdin** (so the secret stays out of `argv` and shell history) and replaces the stored one. When you run it interactively the input is **not echoed** to the screen; you can also pipe it from a secret store, and pass the new keyID to rotate the whole pair:
@@ -237,6 +240,8 @@ bb rm reports/report.pdf                 # delete one object (asks to confirm)
 bb rm photos/ -r -f                      # delete a whole prefix, skip confirmation
 ```
 
+- **`rm` only deletes objects in the bucket — never your local files.** Each line reads `deleted (remote) <object>` and a recursive delete ends with `Deleted N object(s) from bucket "<name>". Local files were not touched.` Object names mirror local paths without the leading `/` (e.g. `home/me/Documents/a.txt`), which is why they can look local. All versions of each object are removed.
+
 - For `get`/`put`, the second path defaults to the basename if you omit it.
 - `rm` deletes **all versions** on the `b2` backend and **confirms** unless you pass `-f` or `-y`.
 - **Flags go anywhere:** `-r`, `-f`, `-y`, and `--backend` may appear before, after, or between the path arguments — `bb rm photos/ -r -f` and `bb rm -r -f photos/` are equivalent.
@@ -281,7 +286,7 @@ The applicationKey is masked (last 4 characters); the keyID is just an identifie
 | `bb ls [path] [-r]` | List bucket contents (folders shown with trailing `/`) |
 | `bb get <remote> [local] [-r]` | Download an object, or a prefix with `-r` |
 | `bb put <local> [remote] [-r]` | Upload a file, or a directory with `-r` |
-| `bb rm <path> [-r] [-f]` | Delete an object/prefix; confirms unless `-f`/`-y` |
+| `bb rm <path> [-r] [-f]` | Delete an object/prefix **in the bucket** (local files untouched); confirms unless `-f`/`-y` |
 | `bb find <query> [prefix]` | Case-insensitive substring search of object names |
 | `bb help` | Print usage |
 

@@ -36,6 +36,19 @@ func main() {
 // run loads config, opens the store, dispatches the subcommand, and returns an
 // exit code (0 success, 1 error).
 func run(args []string) int {
+	// version/help need no state: answer them before config.Load / store.Open,
+	// which create ~/backup_repo, its master key and an empty database.
+	if len(args) > 0 {
+		switch args[0] {
+		case "version", "--version", "-v":
+			fmt.Fprintf(os.Stdout, "bb %s\n", strings.TrimSpace(versionFile))
+			return 0
+		case "help", "-h", "--help":
+			usage(os.Stdout)
+			return 0
+		}
+	}
+
 	ctx := context.Background()
 	cfg, err := config.Load(ctx)
 	if err != nil {
@@ -157,7 +170,11 @@ func run(args []string) int {
 		if e != nil {
 			return fail(e)
 		}
-		err = cli.Rm(ctx, be, argAt(pos, 0), *recursive, *force, os.Stdin, os.Stdout)
+		rc, e := st.GetConfig(ctx)
+		if e != nil {
+			return fail(e)
+		}
+		err = cli.Rm(ctx, be, rc.Bucket, argAt(pos, 0), *recursive, *force, os.Stdin, os.Stdout)
 	case "backend":
 		kind := ""
 		if len(rest) > 0 {
@@ -196,10 +213,6 @@ func run(args []string) int {
 		if errors.Is(err, errFlagsReported) {
 			return 1
 		}
-	case "version", "--version", "-v":
-		fmt.Fprintf(os.Stdout, "bb %s\n", strings.TrimSpace(versionFile))
-	case "help", "-h", "--help":
-		usage(os.Stdout)
 	default:
 		usage(os.Stderr)
 		return 1

@@ -374,3 +374,24 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ⚠️ Follow-up (pre-existing, sharpened by unattended starts): PID liveness is a signal-0 probe only, so a reused PID can block startup and make `bb stop` signal an unrelated process. Fix: on Linux also check `/proc/<pid>/exe` is bb. The install error now names the PID file instead of prescribing `bb stop`. Also: `bb watch` still stores relative paths verbatim — consider storing `filepath.Abs`.
 - ⚠️ Folders added later with `bb watch` need `systemctl --user restart backuprepo` (daemon reads folders once). Without lingering the service stops at logout.
 - ⚠️ Not exercised against a live user manager in CI/tests (would back up real files); verified only via fake runner + `systemd-analyze verify` + sandboxed-HOME CLI runs.
+
+### ADR-021: `init` picks a working backend; state-free `version`/`help`; `rm` names the bucket (2026-11-15)
+
+**Context:**
+- Field use of v1.0.4 (see bugs.md 2026-11-15): `init` saved an empty endpoint/region on the default `s3` backend (uploads failed); `init` without a terminal gave a misleading "required" error; `bb version` created `~/backup_repo`; `bb rm` output was mistaken for local deletions.
+
+**Decision:**
+- **`init` validates against the backend, before saving.** Blank endpoint *or* region (after deriving region from `https://s3.<region>.backblazeb2.com`, and adding a missing `https://`) → store backend `b2`, which needs only keyID/appKey/bucket ID; with no bucket ID either, refuse (`ErrInvalidCredentials`) without saving. A supplied endpoint+region leaves the stored backend unchanged (default `s3`) — **except** when the stored backend is `b2` and this init has no bucket ID: `SaveConfig` keeps the backend column, so that would leave an unusable `b2`; init switches to `s3` and says so (review finding S1). Endpoints are normalised to `scheme://host[:port]` (path dropped) and region matching is case-insensitive. This supersedes the README's old "leave them blank, then run `bb backend b2`" two-step.
+- **Input exhaustion ≠ blank answer.** `init` records EOF; missing required answers after EOF → new sentinel `apperr.ErrNoInput` ("input ended before setup was complete (run `bb init` in an interactive terminal)"). A terminal check (`term.IsTerminal`) was rejected because piping answers into `init` is a legitimate scripted setup (and how the tests drive it).
+- **`version`/`help` exit before `config.Load`/`store.Open`.** Other commands still create state on first run (by design, ADR-002).
+- **`cli.Rm` takes the bucket name** (from `store.GetConfig`) purely for messages: prompt, `deleted (remote) <key>` lines, a closing summary that says local files were not touched, and a partial-failure count in the error.
+
+**Alternatives Considered:**
+- Re-prompt for endpoint/region until valid → Rejected: B2-only users legitimately have no S3 values; picking `b2` is the right outcome, not an error.
+- Default every new config to `b2` → Rejected: changes behaviour for existing S3 users and ADR-009's default.
+- Keep `deleted <key>` and only add a summary → Rejected: the per-line text is what was misread.
+
+**Consequences:**
+- ✅ The README's "leave endpoint/region blank" advice now produces a working config; the Windows quick start's `bb backend b2` step becomes a check.
+- ⚠️ `rm` output text changed (`deleted (remote) …` + summary) — scripts grepping `^deleted ` still match the prefix, but exact-line matches would not.
+- ⚠️ Re-running `init` with blank endpoint/region on an existing S3 setup switches it to `b2` (announced in the output).

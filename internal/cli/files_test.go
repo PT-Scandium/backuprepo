@@ -150,14 +150,14 @@ func TestRmConfirmAndForce(t *testing.T) {
 	be := seedBackend(ctx, "a.txt")
 	// Declined confirmation: object stays.
 	var out bytes.Buffer
-	if err := Rm(ctx, be, "a.txt", false, false, strings.NewReader("n\n"), &out); err != nil {
+	if err := Rm(ctx, be, "test-bucket", "a.txt", false, false, strings.NewReader("n\n"), &out); err != nil {
 		t.Fatalf("Rm(declined): %v", err)
 	}
 	if ok, _ := be.Exists(ctx, "a.txt"); !ok {
 		t.Fatal("object should survive a declined delete")
 	}
 	// Force: object removed without prompt.
-	if err := Rm(ctx, be, "a.txt", false, true, strings.NewReader(""), &out); err != nil {
+	if err := Rm(ctx, be, "test-bucket", "a.txt", false, true, strings.NewReader(""), &out); err != nil {
 		t.Fatalf("Rm(force): %v", err)
 	}
 	if ok, _ := be.Exists(ctx, "a.txt"); ok {
@@ -170,7 +170,7 @@ func TestRmRecursive(t *testing.T) {
 	ctx := context.Background()
 	be := seedBackend(ctx, "p/1.txt", "p/2.txt", "q/3.txt")
 	var out bytes.Buffer
-	if err := Rm(ctx, be, "p/", true, true, strings.NewReader(""), &out); err != nil {
+	if err := Rm(ctx, be, "test-bucket", "p/", true, true, strings.NewReader(""), &out); err != nil {
 		t.Fatalf("Rm(-r): %v", err)
 	}
 	if len(be.Objects) != 1 {
@@ -261,5 +261,85 @@ func TestPutDirWithoutRecursiveErrors(t *testing.T) {
 	err := Put(ctx, be, tmpDir, "remote", false, false, &out)
 	if err == nil {
 		t.Fatal("expected error when putting directory without -r, got nil")
+	}
+}
+
+// TestRmOutputSaysRemote guards the wording that makes clear rm acts on the
+// bucket, not the local disk (a user mistook "deleted home/..." lines for local
+// deletions): prompt, per-object lines and summary all name the bucket.
+func TestRmOutputSaysRemote(t *testing.T) {
+	ctx := context.Background()
+	be := seedBackend(ctx, "home/u/Documents/a.txt", "home/u/Documents/b.txt")
+
+	var out bytes.Buffer
+	if err := Rm(ctx, be, "my-bucket", "home/", true, false, strings.NewReader("n\n"), &out); err != nil {
+		t.Fatalf("Rm(declined): %v", err)
+	}
+	if !strings.Contains(out.String(), `from bucket "my-bucket" (local files are not affected)?`) {
+		t.Errorf("confirm prompt must name the bucket and reassure about local files: %q", out.String())
+	}
+	if len(be.Objects) != 2 {
+		t.Fatalf("declined rm deleted objects: %d left", len(be.Objects))
+	}
+
+	out.Reset()
+	if err := Rm(ctx, be, "my-bucket", "home/", true, true, strings.NewReader(""), &out); err != nil {
+		t.Fatalf("Rm(-r -f): %v", err)
+	}
+	for _, want := range []string{
+		"deleted (remote) home/u/Documents/a.txt\n",
+		"deleted (remote) home/u/Documents/b.txt\n",
+		`Deleted 2 object(s) from bucket "my-bucket". Local files were not touched.`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output missing %q:\n%s", want, out.String())
+		}
+	}
+
+	out.Reset()
+	if err := Rm(ctx, be, "my-bucket", "home/", true, true, strings.NewReader(""), &out); err != nil {
+		t.Fatalf("Rm(empty): %v", err)
+	}
+	if !strings.Contains(out.String(), `nothing to delete under "home/" in bucket "my-bucket"`) {
+		t.Errorf("empty rm output = %q", out.String())
+	}
+
+	be = seedBackend(ctx, "x.txt")
+	out.Reset()
+	if err := Rm(ctx, be, "my-bucket", "x.txt", false, true, strings.NewReader(""), &out); err != nil {
+		t.Fatalf("Rm(single): %v", err)
+	}
+	if !strings.Contains(out.String(), `deleted (remote) x.txt from bucket "my-bucket". Local files were not touched.`) {
+		t.Errorf("single rm output = %q", out.String())
+	}
+}
+
+// failSecondDelete fails the second Delete call, to exercise rm's partial-failure report.
+type failSecondDelete struct {
+	*b2.FakeBackend
+	calls int
+}
+
+func (f *failSecondDelete) Delete(ctx context.Context, key string) error {
+	f.calls++
+	if f.calls == 2 {
+		return apperr.ErrDeleteFailed
+	}
+	return f.FakeBackend.Delete(ctx, key)
+}
+
+func TestRmRecursiveReportsPartialFailure(t *testing.T) {
+	ctx := context.Background()
+	be := &failSecondDelete{FakeBackend: seedBackend(ctx, "p/1", "p/2", "p/3")}
+	var out bytes.Buffer
+	err := Rm(ctx, be, "my-bucket", "p", true, true, strings.NewReader(""), &out)
+	if !errors.Is(err, apperr.ErrDeleteFailed) {
+		t.Fatalf("want ErrDeleteFailed, got %v", err)
+	}
+	if !strings.Contains(err.Error(), `deleted 1 of 3 object(s) from bucket "my-bucket"`) {
+		t.Errorf("error must say how far it got: %v", err)
+	}
+	if strings.Contains(out.String(), "Local files were not touched") {
+		t.Errorf("no success summary on failure: %q", out.String())
 	}
 }

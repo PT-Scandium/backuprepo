@@ -42,6 +42,24 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 - **Solution**: Only add `startFileName`/`startFileId` to the request body when non-empty (mirrors `listRaw`). Strengthened the httptest stub to 400 on an empty/oraphan `startFileId` so it can't regress. Verified live against bucket SC-OFFICE.
 - **Prevention**: Don't send empty optional cursor params to B2; make test stubs validate request shape rather than ignore it. Run the live B2 e2e for any new bucket op.
 
+### 2026-11-15 - `bb init` saved an S3 config with no endpoint/region; daemon couldn't upload
+- **Issue**: User left *S3 endpoint URL* and *S3 region* blank (README said that's fine for the B2 backend). `init` saved them empty but kept the default `s3` backend, so every upload failed: `failed to resolve service endpoint ... A region must be set`. Fixed live with `bb backend b2`.
+- **Root Cause**: `init` never validated that the stored backend could work with the answers; choosing `b2` was a separate manual step the docs didn't make obvious.
+- **Solution (v1.0.5)**: blank endpoint or region → `init` sets backend `b2` (needs a bucket ID; refuses before saving if there is none). Endpoint host without scheme gets `https://`; blank region is derived from `s3.<region>.backblazeb2.com`. Tests: `TestInitBlankEndpointUsesNativeB2` and siblings in `cli_test.go`.
+- **Prevention**: Validate a config against the backend that will use it at save time, not at first upload.
+
+### 2026-11-15 - `bb init` without a terminal blamed the user; `bb version` created state
+- **Issue**: `! bb init` (agent shell, no interactive stdin) printed all prompts on one line and failed with "keyID, applicationKey and bucket are required". Separately, `bb version` with a real HOME created `~/backup_repo/key` + an empty `backup.db`.
+- **Root Cause**: `init` ignored `ReadString` EOF errors; `run()` called `config.Load` + `store.Open` before dispatching any subcommand.
+- **Solution (v1.0.5)**: `init` tracks EOF and returns `apperr.ErrNoInput` ("run `bb init` in an interactive terminal") when required answers are missing because input ended; piped answers still work. `version`/`help` return before `config.Load`. Tests: `TestInitNoInput`, `TestVersionAndHelpCreateNoState`.
+- **Prevention**: Commands that need no state must not open it; interactive commands should distinguish "no input" from "blank answer".
+
+### 2026-11-15 - `bb rm` output mistaken for local deletions
+- **Issue**: After `bb rm -r home/ -y`, lines like `deleted home/edisonch/Documents/...` made the user think local files were deleted (they weren't — `Rm` only calls `be.Delete`).
+- **Root Cause**: Remote keys mirror local paths minus the leading `/`, and the output never said "bucket" or "remote".
+- **Solution (v1.0.5)**: prompt names the bucket and says local files are not affected; lines read `deleted (remote) <key>`; recursive rm ends with `Deleted N object(s) from bucket "<name>". Local files were not touched.`; a mid-batch failure reports how many were already deleted. Tests: `TestRmOutputSaysRemote`, `TestRmRecursiveReportsPartialFailure`.
+- **Prevention**: Destructive commands must say *where* they act.
+
 Candidates that were caught during the build review (not bugs, but worth knowing — see decisions.md):
 - Root `errors.go` from the spec was infeasible (Go forbids `internal/` importing package `main`) → typed errors moved to `internal/apperr` (ADR-005).
 - SQLCipher requires CGO, conflicting with the static-binary goal → switched to pure-Go SQLite + AES-GCM field encryption (ADR-001).

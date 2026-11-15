@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -32,9 +33,13 @@ type BucketLister func(ctx context.Context, cfg b2.Config) ([]b2.BucketInfo, err
 // b2.ListBuckets.
 func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer, lister BucketLister) error {
 	r := bufio.NewReader(in)
+	inputEnded := false // set once the reader is exhausted (EOF)
 	ask := func(label string) string {
 		fmt.Fprintf(out, "%s: ", label)
-		line, _ := r.ReadString('\n')
+		line, err := r.ReadString('\n')
+		if err != nil {
+			inputEnded = true
+		}
 		return strings.TrimSpace(line)
 	}
 
@@ -44,6 +49,12 @@ func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer, lis
 		Bucket: ask("Bucket name"),
 	}
 	if cfg.KeyID == "" || cfg.AppKey == "" || cfg.Bucket == "" {
+		// With no interactive stdin (e.g. `! bb init` in an agent shell, or
+		// </dev/null) every prompt reads EOF; say so instead of blaming the user.
+		if inputEnded {
+			fmt.Fprintln(out)
+			return apperr.ErrNoInput
+		}
 		return fmt.Errorf("%w: keyID, applicationKey and bucket are required", apperr.ErrInvalidCredentials)
 	}
 	// Try to resolve the bucket ID automatically so the user needn't hunt for it;
@@ -52,11 +63,50 @@ func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer, lis
 	if cfg.BucketID == "" {
 		cfg.BucketID = ask("Bucket ID (for native B2 API)")
 	}
-	cfg.Endpoint = ask("S3 endpoint URL (e.g. https://s3.us-west-004.backblazeb2.com)")
-	cfg.Region = ask("S3 region (e.g. us-west-004)")
+	cfg.Endpoint = normalizeEndpoint(ask("S3 endpoint URL (e.g. https://s3.us-west-004.backblazeb2.com; blank = native B2 API only)"))
+	cfg.Region = ask("S3 region (e.g. us-west-004; blank = derive from endpoint)")
+	if cfg.Region == "" && cfg.Endpoint != "" {
+		if cfg.Region = regionFromEndpoint(cfg.Endpoint); cfg.Region != "" {
+			fmt.Fprintf(out, "Region: %s (from endpoint)\n", cfg.Region)
+		}
+	}
+	// The s3 backend cannot work without an endpoint and region; the native b2
+	// backend needs only the bucket ID. Decide before saving anything.
+	useB2 := cfg.Endpoint == "" || cfg.Region == ""
+	if useB2 && cfg.BucketID == "" {
+		return fmt.Errorf("%w: need either an S3 endpoint and region, or a bucket ID for the native B2 API",
+			apperr.ErrInvalidCredentials)
+	}
 
 	if err := st.SaveConfig(ctx, cfg); err != nil {
 		return err
+	}
+	// SaveConfig keeps the stored backend column, so make sure the backend that
+	// will be used can work with what was just saved.
+	switch {
+	case useB2:
+		if err := st.SetBackend(ctx, "b2"); err != nil {
+			return err
+		}
+		if cfg.Endpoint == "" {
+			fmt.Fprintln(out, "No S3 endpoint given: using the native B2 backend (`bb backend b2`).")
+		} else {
+			fmt.Fprintf(out, "No S3 region given and none could be derived from %s: using the native B2 backend (`bb backend b2`).\n",
+				cfg.Endpoint)
+		}
+	case cfg.BucketID == "":
+		// A b2 backend left over from an earlier init needs a bucket ID it no
+		// longer has; s3 is usable (endpoint + region are set), so switch to it.
+		kind, err := st.GetBackend(ctx)
+		if err != nil {
+			return err
+		}
+		if kind == "b2" {
+			if err := st.SetBackend(ctx, "s3"); err != nil {
+				return err
+			}
+			fmt.Fprintln(out, "No bucket ID for the native B2 backend: switched to the S3 backend (`bb backend s3`).")
+		}
 	}
 	fmt.Fprintln(out, "Configuration saved.")
 
@@ -274,6 +324,37 @@ func Upload(ctx context.Context, st *store.Store, be b2.Backend, deleteRemoved b
 	fmt.Fprintf(out, "Uploaded: %d, Skipped: %d, Deleted: %d, Failed: %d\n",
 		res.Uploaded, res.Skipped, res.Deleted, res.Failed)
 	return err
+}
+
+// normalizeEndpoint trims the S3 endpoint, adds an https:// scheme when the
+// user pasted just the host (as Backblaze's Buckets page shows it), and drops
+// any path (e.g. a pasted ".../bucket-name"), since the SDK needs a base URL.
+func normalizeEndpoint(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if !strings.Contains(s, "://") {
+		s = "https://" + s
+	}
+	if u, err := url.Parse(s); err == nil && u.Host != "" {
+		return u.Scheme + "://" + u.Host
+	}
+	return strings.TrimRight(s, "/")
+}
+
+// regionFromEndpoint derives the region from a Backblaze S3 endpoint of the
+// form https://s3.<region>.backblazeb2.com, or returns "" if it doesn't match.
+func regionFromEndpoint(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.ToLower(u.Hostname()), ".")
+	if len(parts) == 4 && parts[0] == "s3" && parts[1] != "" && parts[2] == "backblazeb2" && parts[3] == "com" {
+		return parts[1]
+	}
+	return ""
 }
 
 // readSecret reads a secret from in, writing prompt to out first. When in is an

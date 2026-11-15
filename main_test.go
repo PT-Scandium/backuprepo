@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -123,5 +125,22 @@ func TestParseServiceArgs(t *testing.T) {
 
 	if _, err := parseServiceArgs([]string{"install", "--nope"}); !errors.Is(err, errFlagsReported) {
 		t.Errorf("bad flag: want errFlagsReported, got %v", err)
+	}
+}
+
+// TestVersionAndHelpCreateNoState is the regression for `bb version` creating
+// ~/backup_repo (master key + empty DB) as a side effect: they now answer
+// before config.Load.
+func TestVersionAndHelpCreateNoState(t *testing.T) {
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}, {"help"}, {"--help"}, {"-h"}} {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
+		if code := run(args); code != 0 {
+			t.Errorf("run(%q) = %d, want 0", args, code)
+		}
+		if _, err := os.Stat(filepath.Join(home, "backup_repo")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("run(%q) created ~/backup_repo (stat err %v)", args, err)
+		}
 	}
 }

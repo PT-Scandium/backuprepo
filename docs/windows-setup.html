@@ -130,9 +130,9 @@ footer a{color:var(--accent)}
     <tr><td>8</td><td>Start setup</td><td><code>bb init</code></td></tr>
     <tr><td>9</td><td>Credential prompts</td><td>Paste <strong>keyID</strong> → <kbd>Enter</kbd>, paste <strong>applicationKey</strong> → <kbd>Enter</kbd>, type <strong>bucket name</strong> → <kbd>Enter</kbd></td></tr>
     <tr><td>10</td><td>Bucket ID</td><td>Resolved automatically. If it still asks, paste the <strong>Bucket ID</strong> from the B2 console → <kbd>Enter</kbd></td></tr>
-    <tr><td>11</td><td>Skip the two S3 prompts</td><td>Press <kbd>Enter</kbd> on <em>S3 endpoint URL</em>, then <kbd>Enter</kbd> again on <em>S3 region</em> — unused by the B2 backend</td></tr>
+    <tr><td>11</td><td>Skip the two S3 prompts</td><td>Press <kbd>Enter</kbd> on <em>S3 endpoint URL</em>, then <kbd>Enter</kbd> again on <em>S3 region</em> — <code>bb init</code> then selects the B2 backend for you</td></tr>
     <tr><td>12</td><td>Folder to watch</td><td>Press <kbd>Enter</kbd> to skip — you can add one later with <code>bb watch</code></td></tr>
-    <tr><td>13</td><td>Select the B2 backend</td><td><code>bb backend b2</code> — required, because the stored default is <code>s3</code></td></tr>
+    <tr><td>13</td><td>Check the B2 backend</td><td><code>bb backend</code> → <code>b2</code> (set automatically by step 11 since v1.0.5; on older versions run <code>bb backend b2</code>)</td></tr>
     <tr><td>14</td><td>Verify the login</td><td><code>bb ls</code> — lists your bucket</td></tr>
   </tbody>
 </table>

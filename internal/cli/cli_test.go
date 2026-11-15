@@ -330,3 +330,191 @@ func TestSetAppKeyRequiresConfig(t *testing.T) {
 		t.Fatalf("want ErrNotConfigured, got %v", err)
 	}
 }
+
+// TestInitNoInput is the regression for running `bb init` without an
+// interactive stdin (e.g. `! bb init` in an agent shell): every prompt read
+// EOF and the user was told the fields were "required". Now it says why.
+func TestInitNoInput(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	var out bytes.Buffer
+	if err := Init(ctx, st, strings.NewReader(""), &out, nil); !errors.Is(err, apperr.ErrNoInput) {
+		t.Fatalf("want ErrNoInput, got %v", err)
+	}
+	if ok, _ := st.IsConfigured(ctx); ok {
+		t.Error("nothing may be saved without input")
+	}
+}
+
+// TestInitBlankRequiredWithInput: blank answers on a live input stream are a
+// user error (required fields), not a missing terminal.
+func TestInitBlankRequiredWithInput(t *testing.T) {
+	st := newStore(t)
+	err := Init(context.Background(), st, strings.NewReader("\n\n\nmore\n"), &bytes.Buffer{}, nil)
+	if !errors.Is(err, apperr.ErrInvalidCredentials) || errors.Is(err, apperr.ErrNoInput) {
+		t.Fatalf("want ErrInvalidCredentials, got %v", err)
+	}
+}
+
+// initAnswers runs Init with the given endpoint/region answers; the bucket ID
+// is auto-resolved when resolveID is set, else the bucket-ID prompt gets bid.
+func initAnswers(t *testing.T, resolveID bool, bid, endpoint, region string) (*store.Store, string, error) {
+	t.Helper()
+	st := newStore(t)
+	var lister BucketLister
+	lines := []string{"0001keyid", "K001-secret", "my-bucket"}
+	if resolveID {
+		lister = func(context.Context, b2.Config) ([]b2.BucketInfo, error) {
+			return []b2.BucketInfo{{Name: "my-bucket", ID: "auto-bid"}}, nil
+		}
+	} else {
+		lines = append(lines, bid)
+	}
+	lines = append(lines, endpoint, region, "")
+	var out bytes.Buffer
+	err := Init(context.Background(), st, strings.NewReader(strings.Join(lines, "\n")), &out, lister)
+	return st, out.String(), err
+}
+
+// TestInitBlankEndpointUsesNativeB2 is the regression for a config saved with
+// an empty endpoint/region on the default s3 backend, which then failed every
+// upload ("A region must be set"). With a bucket ID, init now picks b2.
+func TestInitBlankEndpointUsesNativeB2(t *testing.T) {
+	st, out, err := initAnswers(t, true, "", "", "")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if kind, _ := st.GetBackend(context.Background()); kind != "b2" {
+		t.Errorf("backend = %q, want b2", kind)
+	}
+	if !strings.Contains(out, "using the native B2 backend") || !strings.Contains(out, "Configuration saved.") {
+		t.Errorf("output = %q", out)
+	}
+}
+
+func TestInitBlankEndpointWithoutBucketIDFails(t *testing.T) {
+	st, _, err := initAnswers(t, false, "", "", "")
+	if !errors.Is(err, apperr.ErrInvalidCredentials) || !strings.Contains(err.Error(), "bucket ID") {
+		t.Fatalf("want ErrInvalidCredentials about the bucket ID, got %v", err)
+	}
+	if ok, _ := st.IsConfigured(context.Background()); ok {
+		t.Error("an unusable config must not be saved")
+	}
+}
+
+// TestInitEndpointHostOnlyDerivesRegion: pasting the host from Backblaze's
+// Buckets page (no scheme) and leaving region blank yields a working s3 config.
+func TestInitEndpointHostOnlyDerivesRegion(t *testing.T) {
+	st, out, err := initAnswers(t, true, "", "s3.us-west-004.backblazeb2.com", "")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	cfg, _ := st.GetConfig(context.Background())
+	if cfg.Endpoint != "https://s3.us-west-004.backblazeb2.com" || cfg.Region != "us-west-004" {
+		t.Errorf("endpoint/region = %q/%q", cfg.Endpoint, cfg.Region)
+	}
+	if kind, _ := st.GetBackend(context.Background()); kind != "s3" {
+		t.Errorf("backend = %q, want s3 (default kept)", kind)
+	}
+	if !strings.Contains(out, "Region: us-west-004 (from endpoint)") {
+		t.Errorf("output = %q", out)
+	}
+}
+
+// TestInitUnderivableRegionFallsBackToB2: a non-Backblaze endpoint with no
+// region can't be used by s3, so init falls back to b2 rather than saving a
+// broken s3 config.
+func TestInitUnderivableRegionFallsBackToB2(t *testing.T) {
+	st, out, err := initAnswers(t, false, "bid-1", "https://s3.example.com", "")
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if kind, _ := st.GetBackend(context.Background()); kind != "b2" {
+		t.Errorf("backend = %q, want b2", kind)
+	}
+	// The user did give an endpoint: the message must not claim otherwise.
+	if !strings.Contains(out, "none could be derived from https://s3.example.com") ||
+		strings.Contains(out, "No S3 endpoint given") {
+		t.Errorf("output = %q", out)
+	}
+}
+
+// reinit runs Init again on st with S3 values and the given bucket-ID answer
+// (no lister, so the bucket-ID prompt is used).
+func reinit(t *testing.T, st *store.Store, bid string) string {
+	t.Helper()
+	lines := []string{"0001keyid", "K001-secret", "my-bucket", bid,
+		"https://s3.us-west-004.backblazeb2.com", "us-west-004", ""}
+	var out bytes.Buffer
+	if err := Init(context.Background(), st, strings.NewReader(strings.Join(lines, "\n")), &out, nil); err != nil {
+		t.Fatalf("re-Init: %v", err)
+	}
+	return out.String()
+}
+
+// TestReinitWithS3ValuesNeverLeavesUnusableB2 is the regression for review
+// finding S1: SaveConfig keeps the backend column, so re-running init with S3
+// values but no bucket ID used to leave backend b2 with an empty bucket ID.
+func TestReinitWithS3ValuesNeverLeavesUnusableB2(t *testing.T) {
+	ctx := context.Background()
+	st, _, err := initAnswers(t, true, "", "", "") // first init: auto-selects b2
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := reinit(t, st, "")
+	cfg, _ := st.GetConfig(ctx)
+	kind, _ := st.GetBackend(ctx)
+	if kind != "s3" || cfg.BucketID != "" {
+		t.Fatalf("backend=%q bucketID=%q, want s3 with no bucket ID", kind, cfg.BucketID)
+	}
+	if !strings.Contains(out, "switched to the S3 backend") {
+		t.Errorf("switch must be announced: %q", out)
+	}
+}
+
+// TestReinitKeepsWorkingB2: a deliberate b2 choice that still has a bucket ID
+// is left alone when init is re-run with S3 values too.
+func TestReinitKeepsWorkingB2(t *testing.T) {
+	ctx := context.Background()
+	st, _, err := initAnswers(t, true, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := reinit(t, st, "bid-9")
+	if kind, _ := st.GetBackend(ctx); kind != "b2" {
+		t.Errorf("backend = %q, want b2 kept", kind)
+	}
+	if strings.Contains(out, "switched") {
+		t.Errorf("no switch expected: %q", out)
+	}
+}
+
+func TestNormalizeEndpointAndRegion(t *testing.T) {
+	norm := map[string]string{
+		"":                                       "",
+		"  s3.eu-central-003.backblazeb2.com/  ": "https://s3.eu-central-003.backblazeb2.com",
+		"s3.us-west-004.backblazeb2.com/my-bucket/":    "https://s3.us-west-004.backblazeb2.com",
+		"https://s3.us-west-004.backblazeb2.com:443/x": "https://s3.us-west-004.backblazeb2.com:443",
+		"https://s3.us-west-004.backblazeb2.com":       "https://s3.us-west-004.backblazeb2.com",
+		"http://localhost:9000":                        "http://localhost:9000",
+	}
+	for in, want := range norm {
+		if got := normalizeEndpoint(in); got != want {
+			t.Errorf("normalizeEndpoint(%q) = %q, want %q", in, got, want)
+		}
+	}
+	region := map[string]string{
+		"https://s3.us-west-004.backblazeb2.com":        "us-west-004",
+		"https://S3.US-WEST-004.BACKBLAZEB2.COM":        "us-west-004",
+		"https://s3.eu-central-003.backblazeb2.com:443": "eu-central-003",
+		"https://s3.example.com":                        "",
+		"https://backblazeb2.com":                       "",
+		"https://s3..backblazeb2.com":                   "",
+		"://bad":                                        "",
+	}
+	for in, want := range region {
+		if got := regionFromEndpoint(in); got != want {
+			t.Errorf("regionFromEndpoint(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
