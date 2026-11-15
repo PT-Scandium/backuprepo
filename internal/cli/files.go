@@ -224,7 +224,12 @@ func uploadFrom(ctx context.Context, be b2.Backend, local, key string) error {
 
 // Rm deletes an object, or (with recursive) every object under a prefix. Prompts
 // for confirmation unless force is set.
-func Rm(ctx context.Context, be b2.Backend, path string, recursive, force bool, in io.Reader, out io.Writer) error {
+//
+// bucket is the configured bucket name, used only in messages: every prompt,
+// line and summary says the deletion happens in the bucket, so output listing
+// home/... keys can't be mistaken for local files being removed. Rm never
+// touches the local filesystem.
+func Rm(ctx context.Context, be b2.Backend, bucket, path string, recursive, force bool, in io.Reader, out io.Writer) error {
 	if recursive {
 		prefix := remoteKey(path)
 		if prefix != "" && !strings.HasSuffix(prefix, "/") {
@@ -235,30 +240,34 @@ func Rm(ctx context.Context, be b2.Backend, path string, recursive, force bool, 
 			return err
 		}
 		if len(l.Objects) == 0 {
-			fmt.Fprintln(out, "nothing to delete")
+			fmt.Fprintf(out, "nothing to delete under %q in bucket %q\n", prefix, bucket)
 			return nil
 		}
-		if !force && !confirm(in, out, fmt.Sprintf("Delete %d object(s) under %q?", len(l.Objects), prefix)) {
+		q := fmt.Sprintf("Delete %d object(s) under %q from bucket %q (local files are not affected)?",
+			len(l.Objects), prefix, bucket)
+		if !force && !confirm(in, out, q) {
 			fmt.Fprintln(out, "aborted")
 			return nil
 		}
-		for _, o := range l.Objects {
+		for i, o := range l.Objects {
 			if err := be.Delete(ctx, o.Key); err != nil {
-				return err
+				return fmt.Errorf("%w (deleted %d of %d object(s) from bucket %q before this error)",
+					err, i, len(l.Objects), bucket)
 			}
-			fmt.Fprintf(out, "deleted %s\n", o.Key)
+			fmt.Fprintf(out, "deleted (remote) %s\n", o.Key)
 		}
+		fmt.Fprintf(out, "Deleted %d object(s) from bucket %q. Local files were not touched.\n", len(l.Objects), bucket)
 		return nil
 	}
 	key := remoteKey(path)
-	if !force && !confirm(in, out, fmt.Sprintf("Delete %q?", key)) {
+	if !force && !confirm(in, out, fmt.Sprintf("Delete %q from bucket %q (local files are not affected)?", key, bucket)) {
 		fmt.Fprintln(out, "aborted")
 		return nil
 	}
 	if err := be.Delete(ctx, key); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "deleted %s\n", key)
+	fmt.Fprintf(out, "deleted (remote) %s from bucket %q. Local files were not touched.\n", key, bucket)
 	return nil
 }
 

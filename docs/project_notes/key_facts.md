@@ -61,6 +61,8 @@ Partial reconfig without a full `init` (all require existing config):
 - `bucket [<name> [<id>]]` — show/switch the destination bucket (name + ID only). With `<name>` **only**, the bucket ID is **auto-resolved** from the account (native `b2_list_buckets`); pass `<id>` to set it explicitly (no lookup). On a failed/not-found lookup it clears the ID (old S3-only behavior). See ADR-017.
 - `appkey [<new-keyID>]` — replace the applicationKey, **read from stdin** (never argv/shell history); optional keyID rotates the whole pair. Interactive entry is **no-echo** (via `golang.org/x/term`); piped/non-terminal input reads a line (so `pass show … | bb appkey` and tests work). Empty → `ErrInvalidCredentials`; the secret is never echoed back (masked via `mask`). See ADR-016.
 
+`bb init` (v1.0.5+) adds `https://` to a bare endpoint host, derives a blank region from `s3.<region>.backblazeb2.com`, and **switches the backend to `b2`** when endpoint or region end up blank (refuses without a bucket ID). With no interactive stdin it fails with `ErrNoInput`. `bb version`/`help` never touch `~/backup_repo`. See ADR-021.
+
 `bb init` also **auto-resolves the bucket ID** from the bucket name (skipping its manual "Bucket ID" prompt) when the credentials can list buckets; it falls back to prompting on failure/not-found. See ADR-017.
 
 > **Credential gotcha:** the **keyID** (applicationKeyID, ~25 chars, on the App Keys page) is NOT the **Account ID** (12 hex chars, on the account dashboard). Entering the account ID as the keyID makes `b2_authorize_account` return **401 → `ErrAuthFailed`** ("authentication failed: status 401"). `keyName` is a cosmetic B2 label and is **not stored or used** by `bb` — only keyID + applicationKey authenticate. Fix a bad pair with `bb appkey <keyID>` (no full re-init). See bugs.md 2026-07-06.
@@ -71,7 +73,7 @@ Available once configured; all accept `--backend s3|b2`:
 - `ls [path] [-r]` — list objects; non-recursive groups folders as prefixes
 - `get <remote> [local] [-r]` — download object(s); `-r` downloads all under a prefix
 - `put <local> [remote] [-r] [--skip-existing]` — upload file(s); `-r` uploads a directory tree. In `-r`, a failed file is reported + counted but does NOT abort the batch (summary `Uploaded/Skipped/Failed`, non-zero exit if any failed). `--skip-existing` skips files already present remotely (presence-only; for resuming). See ADR-019.
-- `rm <path> [-r] [-f|-y]` — delete object(s); confirms unless `-f`/`-y`; `-r` deletes prefix
+- `rm <path> [-r] [-f|-y]` — delete object(s); confirms unless `-f`/`-y`; `-r` deletes prefix; **bucket only, never local files** — output `deleted (remote) <key>` + `Deleted N object(s) from bucket "<name>"` summary (v1.0.5)
 - `find <query> [prefix]` — case-insensitive substring search of object keys
 - `backend [s3|b2]` — show or set the stored backend
 
