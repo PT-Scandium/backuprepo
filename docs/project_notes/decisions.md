@@ -348,3 +348,29 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ One bad file no longer strands a `put -r` batch; `--skip-existing` makes re-runs cheap (skip the already-sent). Mirrors `bb upload`'s Uploaded/Skipped/Failed summary style.
 - ✅ Tests: `TestPutRecursiveContinuesPastFailure` (2 uploaded, 1 FAILED, error returned), `TestPutRecursiveSkipExisting` (1 skipped, 1 uploaded). Full suite + vet + gofmt green; shipped as **v1.0.3**.
 - ⚠️ `put -r` now exits non-zero when *any* file failed even though others succeeded — callers/scripts should read the summary, not just the exit code, to know what got through.
+
+### ADR-020: `bb service` — run the daemon as a generated systemd *user* unit (2026-11-15)
+
+**Context:**
+- Users wanted backups of `~/Documents` to run automatically in the background. The README only offered a hand-copied `backuprepo.service` snippet; the daemon (`bb start`, ADR-012/014) runs in the foreground and reads the watch list **once at startup**.
+
+**Decision:**
+- New `bb service install [--folder DIR] [--delete] [--force] | uninstall | status` (Linux only; other OSes get `ErrService`). New package `internal/service` renders the unit and drives `systemctl --user` through an injectable `Runner` (faked in tests); `internal/cli/service.go` does bb-specific pre-flight; new sentinel `apperr.ErrService`; new `daemon.RunningPID` liveness helper.
+- **User unit, not system unit** — all state (`~/backup_repo` key + DB, ADR-002) belongs to the login user. Unit name stays `backuprepo.service` (what the README already taught). `ExecStart` = absolute, symlink-resolved path of the installing binary, double-quoted with only `%`→`%%` (systemd neither expands nor un-doubles `$` in the executable path). Paths systemd can't run as an executable (`"`, `'`, `\`, control chars — a newline would inject a directive), relative paths and `go run` temp binaries are refused. `Type=exec` so an unexecutable binary fails `restart`.
+- **Install order — all checks before any mutation:** OS → configured → no manual daemon holding the PID lock (unless the live daemon *is* the active unit) → resolve folder (default `~/Documents`, `~`-expanded in Go, `Abs`+`Clean`) and require it to be a directory → refuse `--delete` if any stored folder is relative (warn otherwise; a user unit's cwd is `$HOME`, ADR-013 data-loss risk) → `Manager.Preflight` (binary path, unit ownership/`--force`, `systemctl --user show-environment` bus probe) → add to watch list (reusing an equivalent stored entry, since remote keys derive from the stored path string) → write unit atomically → `daemon-reload`, `enable`, `reset-failed`, **`restart`** → wait 2 s and require `is-active` = `active`, else fail with a journalctl pointer.
+- **Restart policy:** `Restart=on-failure` (graceful `bb stop`/SIGTERM exits 0 and stays stopped), `RestartSec=30`, `StartLimitBurst=5` in `StartLimitIntervalSec=600` (> 5×30 s so it actually trips). Startup does no network I/O (`b2.NewBackend` is lazy), so startup failures are mostly persistent (not configured / no folders) and giving up is correct. The limit also counts **manual** starts, hence `reset-failed` before every install's `restart`. Known transient exception: a stale PID file whose PID was reused by another process makes the daemon refuse to start ("already running") — see the follow-up below.
+- **Ownership marker:** generated units start with `# Managed by \`bb service install\``; install overwrites only marked units (else needs `--force`), uninstall removes only marked units.
+- Lingering (`loginctl enable-linger`) is **printed as a hint, not run** — it changes system login policy.
+
+**Alternatives Considered:**
+- System unit with `User=` → Rejected: needs root, and HOME/state discovery under a system unit is fragile.
+- `Restart=always` → Rejected: would resurrect the daemon after a deliberate `bb stop`.
+- No start limit / infinite retries → Rejected: an unconfigured DB would crash-loop forever; startup does no network I/O, so the only transient startup failure is the stale/reused PID case (tracked as a follow-up), not enough to justify it.
+- Detach/fork inside `bb start` → Rejected: the service manager should own process lifecycle; foreground + `Type=exec` sends stdout to journald for free.
+
+**Consequences:**
+- ✅ One command (`bb service install`) gives automatic background backup of `~/Documents` at every login; logs via `journalctl --user -u backuprepo`.
+- ✅ Tests: `internal/service` 88.8% coverage (render/quoting, systemctl call order incl. reset-failed + health check, preflight/bus failure, hand-written-unit guard, refused exe paths, dropped-`--delete` note, unsupported OS, status/uninstall paths); `cli` pre-flight cases (nothing mutated on any failed check, relative-folder guard); `main.TestParseServiceArgs`; `daemon.TestRunningPID`. Units rendered by the Go code for plain, space, `$` and `%` paths all pass `systemd-analyze --user verify` (systemd 262).
+- ⚠️ Follow-up (pre-existing, sharpened by unattended starts): PID liveness is a signal-0 probe only, so a reused PID can block startup and make `bb stop` signal an unrelated process. Fix: on Linux also check `/proc/<pid>/exe` is bb. The install error now names the PID file instead of prescribing `bb stop`. Also: `bb watch` still stores relative paths verbatim — consider storing `filepath.Abs`.
+- ⚠️ Folders added later with `bb watch` need `systemctl --user restart backuprepo` (daemon reads folders once). Without lingering the service stops at logout.
+- ⚠️ Not exercised against a live user manager in CI/tests (would back up real files); verified only via fake runner + `systemd-analyze verify` + sandboxed-HOME CLI runs.

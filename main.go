@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"backuprepo/internal/b2"
 	"backuprepo/internal/cli"
 	"backuprepo/internal/config"
+	"backuprepo/internal/service"
 	"backuprepo/internal/store"
 )
 
@@ -189,6 +191,11 @@ func run(args []string) int {
 		err = cli.Stop(ctx, cfg.Dir, os.Stdout)
 	case "serve":
 		err = runServe(ctx, st)
+	case "service":
+		err = runService(ctx, st, cfg, rest)
+		if errors.Is(err, errFlagsReported) {
+			return 1
+		}
 	case "version", "--version", "-v":
 		fmt.Fprintf(os.Stdout, "bb %s\n", strings.TrimSpace(versionFile))
 	case "help", "-h", "--help":
@@ -256,6 +263,79 @@ func runServe(ctx context.Context, st *store.Store) error {
 		return err
 	}
 	return cli.Serve(ctx, st, be, os.Stdout)
+}
+
+// errFlagsReported signals a flag-parse failure the flag package has already
+// printed, so run exits 1 without printing it a second time (like the other
+// commands' `return 1` on parseFlags errors).
+var errFlagsReported = errors.New("flags already reported")
+
+// serviceUsage is the `bb service` synopsis shown on a bad subcommand.
+const serviceUsage = "usage: bb service install [--folder DIR] [--delete] [--force] | uninstall | status"
+
+// runService dispatches `bb service install|uninstall|status` (systemd user
+// unit for the watcher daemon; Linux only).
+func runService(ctx context.Context, st *store.Store, cfg *config.Config, args []string) error {
+	opts, err := parseServiceArgs(args)
+	if err != nil {
+		return err
+	}
+	mgr, err := service.NewManager()
+	if err != nil {
+		return err
+	}
+	switch opts.sub {
+	case "install":
+		home, e := os.UserHomeDir()
+		if e != nil {
+			return fmt.Errorf("%w: home dir: %v", apperr.ErrService, e)
+		}
+		return cli.ServiceInstall(ctx, st, mgr, opts.folder, home, cfg.Dir, opts.deleteRemoved, opts.force, os.Stdout)
+	case "uninstall":
+		return cli.ServiceUninstall(ctx, mgr, os.Stdout)
+	default: // "status" (parseServiceArgs admits nothing else)
+		return cli.ServiceStatus(ctx, mgr, os.Stdout)
+	}
+}
+
+// serviceOpts is a parsed `bb service` command line.
+type serviceOpts struct {
+	sub           string // install | uninstall | status
+	folder        string // install: --folder ("" = ~/Documents)
+	deleteRemoved bool   // install: --delete
+	force         bool   // install: --force
+}
+
+// parseServiceArgs validates `bb service` arguments without touching systemd,
+// returning a usage error for an unknown/missing subcommand or stray arguments,
+// and errFlagsReported when the flag package has already printed a flag error.
+func parseServiceArgs(args []string) (serviceOpts, error) {
+	usageErr := fmt.Errorf("%s", serviceUsage)
+	if len(args) == 0 {
+		return serviceOpts{}, usageErr
+	}
+	opts := serviceOpts{sub: args[0]}
+	switch opts.sub {
+	case "install":
+		fs := flag.NewFlagSet("service install", flag.ContinueOnError)
+		fs.StringVar(&opts.folder, "folder", "", "folder to back up (default ~/Documents)")
+		fs.BoolVar(&opts.deleteRemoved, "delete", false, "also remove remote objects whose local files were deleted")
+		fs.BoolVar(&opts.force, "force", false, "replace an existing backuprepo.service not created by bb")
+		pos, err := parseFlags(fs, args[1:])
+		if err != nil {
+			return serviceOpts{}, errFlagsReported // flag already printed the problem
+		}
+		if len(pos) > 0 {
+			return serviceOpts{}, usageErr
+		}
+	case "uninstall", "status":
+		if len(args) > 1 {
+			return serviceOpts{}, usageErr
+		}
+	default:
+		return serviceOpts{}, usageErr
+	}
+	return opts, nil
 }
 
 // effectiveBackend resolves the backend kind: flag override → stored → "s3".
@@ -327,6 +407,13 @@ DAEMON  (background watcher: real-time fsnotify events + 5-min fallback scan)
                                --delete propagates local deletions to the remote (destructive)
   serve                      Start the localhost web UI on http://127.0.0.1:9171 (foreground)
 
+SERVICE  (Linux: run the daemon in the background as a systemd user service)
+  service install [--folder DIR] [--delete] [--force]
+                             Watch DIR (default ~/Documents), then install, enable and start
+                               backuprepo.service so backups run automatically at every login
+  service uninstall          Stop, disable and remove the service (watched folders are kept)
+  service status             Show whether the service is installed, enabled and running
+
 STORAGE BACKEND  (mode — applies to upload and all file operations)
   backend [s3|b2]            Show or set the backend. Default: s3
                                s3 = S3-compatible API (aws-sdk)    b2 = native Backblaze B2 API
@@ -350,6 +437,10 @@ EXAMPLES
   bb init
   bb watch ~/Documents
   bb upload
+
+  # Back up ~/Documents automatically in the background (Linux, systemd)
+  bb service install
+  bb service status
 
   # Native Backblaze B2 mode + manual file management
   bb backend b2

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"reflect"
 	"strings"
@@ -59,6 +60,7 @@ func TestUsageCoversAllCommandsAndModes(t *testing.T) {
 	commands := []string{
 		"init", "config", "watch", "unwatch", "list", "status", "upload",
 		"backend", "ls", "get", "put", "rm", "find",
+		"start", "stop", "serve", "service install", "service uninstall", "service status",
 	}
 	for _, c := range commands {
 		if !strings.Contains(out, c) {
@@ -82,5 +84,44 @@ func TestUsageCoversAllCommandsAndModes(t *testing.T) {
 		if !strings.Contains(out, s) {
 			t.Errorf("usage output missing %q", s)
 		}
+	}
+}
+
+// TestParseServiceArgs covers `bb service` dispatch validation, which runs
+// before any systemd or store access.
+func TestParseServiceArgs(t *testing.T) {
+	ok := []struct {
+		args []string
+		want serviceOpts
+	}{
+		{[]string{"install"}, serviceOpts{sub: "install"}},
+		{[]string{"install", "--folder", "~/Work", "--delete", "--force"},
+			serviceOpts{sub: "install", folder: "~/Work", deleteRemoved: true, force: true}},
+		{[]string{"install", "--folder=/data"}, serviceOpts{sub: "install", folder: "/data"}},
+		{[]string{"uninstall"}, serviceOpts{sub: "uninstall"}},
+		{[]string{"status"}, serviceOpts{sub: "status"}},
+	}
+	for _, tc := range ok {
+		got, err := parseServiceArgs(tc.args)
+		if err != nil || got != tc.want {
+			t.Errorf("parseServiceArgs(%q) = %+v, %v; want %+v", tc.args, got, err, tc.want)
+		}
+	}
+
+	usageCases := [][]string{
+		nil,                  // no subcommand
+		{"bogus"},            // unknown subcommand
+		{"install", "extra"}, // stray positional
+		{"uninstall", "now"}, // extra arg
+		{"status", "-v"},     // extra arg
+	}
+	for _, args := range usageCases {
+		if _, err := parseServiceArgs(args); err == nil || !strings.Contains(err.Error(), "usage: bb service") {
+			t.Errorf("parseServiceArgs(%q): want usage error, got %v", args, err)
+		}
+	}
+
+	if _, err := parseServiceArgs([]string{"install", "--nope"}); !errors.Is(err, errFlagsReported) {
+		t.Errorf("bad flag: want errFlagsReported, got %v", err)
 	}
 }

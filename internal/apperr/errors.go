@@ -21,4 +21,5 @@ var (
 	ErrStore              = errors.New("bb: database error")
 	ErrCrypto             = errors.New("bb: encryption error")
 	ErrDaemon             = errors.New("bb: daemon error")
+	ErrService            = errors.New("bb: service error")
 )
