@@ -66,6 +66,18 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 - **Solution**: `readSecretFrom` reads without echo on a terminal, else from Init's shared reader (ADR-022); `readHidden` restores the terminal and exits 130 on Ctrl-C (review found echo was left off). Unit tests cover the piped path (`TestInitPipedSecretStaysInOrder`, `TestInitInputEndsAtSecret`, `TestReadSecretFromAndEOF`); the terminal path is verified by a manual pty check (old vs new, Ctrl-C).
 - **Prevention**: Any prompt for a secret goes through the no-echo helper; anything that changes terminal modes must restore them on interrupt.
 
+### 2026-11-15 - `bb stop` could signal an unrelated process after PID reuse
+- **Issue**: The PID file held only the PID; after an unclean daemon exit the PID could be reused by another program of the same user. `bb start` then refused ("already running") and `bb stop` sent SIGTERM to that program.
+- **Root Cause**: Liveness = "a process with this PID exists" (signal 0); no identity check before signalling.
+- **Solution**: Record `<pid> <starttime>` (`/proc/<pid>/stat` field 22) and require a match; `Stop` removes a stale file instead of signalling (ADR-023). Linux only; macOS/Windows unchanged.
+- **Prevention**: Never act on a PID without verifying it's still the same process.
+
+### 2026-11-15 - `bb watch` stored relative paths; `unwatch` needed the exact text; typos created state
+- **Issue**: `bb watch docs/` stored `docs/` (a different folder under the systemd service, cwd `$HOME`); `bb unwatch /home/u/Documents` failed when `/home/u/Documents/` was stored; `bb bogus` created `~/backup_repo`.
+- **Root Cause**: Paths stored/matched verbatim; `run` opened state before rejecting unknown commands.
+- **Solution**: `normalizeFolder` + equivalent-entry matching in `Watch`/`Unwatch`; `isCommand` allowlist before `config.Load` (ADR-023).
+- **Prevention**: Normalise user-supplied paths at the boundary; answer/reject commands before creating state.
+
 Candidates that were caught during the build review (not bugs, but worth knowing — see decisions.md):
 - Root `errors.go` from the spec was infeasible (Go forbids `internal/` importing package `main`) → typed errors moved to `internal/apperr` (ADR-005).
 - SQLCipher requires CGO, conflicting with the static-binary goal → switched to pure-Go SQLite + AES-GCM field encryption (ADR-001).

@@ -163,6 +163,9 @@ bb status                       # quick summary (also what `bb` with no command 
 bb upload                       # upload changed files; no-op if nothing changed
 ```
 
+- **Paths are stored absolute.** `bb watch docs/` or `bb watch ~/Documents` (a literal `~` is expanded too) saves the full path, so the daemon and the systemd service — which run from your home directory — back up the folder you meant. An empty path is refused. Watching a folder that's already on the list under another spelling (e.g. with a trailing `/`) keeps the existing entry. `bb unwatch` accepts the exact text shown by `bb list` or any spelling of an absolute entry.
+- **Folders added by older versions** may be stored as relative paths (e.g. `docs`). They keep working as before; `bb watch` points them out. To convert one, `bb unwatch docs` then `bb watch /full/path/docs` — its files are then uploaded again under their new, absolute names.
+
 `upload` uploads only what changed and prints a summary:
 
 ```text
@@ -205,7 +208,7 @@ bb service uninstall               # stop, disable and remove it (watched folder
 
 Elsewhere (Windows, macOS), use the OS service manager to run `bb start`.
 
-For a quick one-off detached run instead: `nohup bb start &`. Either way, only **one** daemon runs at a time (guarded by `~/backup_repo/daemon.pid`); `bb stop` (or `systemctl --user stop`) ends it.
+For a quick one-off detached run instead: `nohup bb start &`. Either way, only **one** daemon runs at a time (guarded by `~/backup_repo/daemon.pid`); `bb stop` (or `systemctl --user stop`) ends it. On Linux the daemon also records its start time (in `~/backup_repo/daemon.start`), so a stale PID file whose PID now belongs to another program is recognised: `bb start` proceeds and `bb stop` removes the stale file instead of signalling that program.
 
 Runs on **Linux and Windows**, and `bb stop` is graceful on both (the daemon removes its PID file and closes cleanly): Linux via `SIGTERM`, Windows via a named stop event (falling back to a forceful terminate only if that event is unavailable). Foreground **Ctrl-C** also stops it cleanly on either OS.
 

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -153,25 +154,152 @@ func resolveBucketID(ctx context.Context, lister BucketLister, keyID, appKey, bu
 }
 
 // Watch adds an existing directory to the watch list.
+//
+// The folder is stored as an absolute, cleaned path ("~" expanded), so it
+// means the same thing to the daemon and the systemd service (which run in
+// $HOME) as it did where `bb watch` was typed. If an equivalent entry already
+// exists it is kept as-is: a trailing-slash twin would just walk the same
+// files twice, and a legacy relative entry (stored verbatim by older
+// versions) names its objects differently, so adding the absolute form would
+// upload everything a second time under new names.
 func Watch(ctx context.Context, st *store.Store, path string, out io.Writer) error {
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		return fmt.Errorf("%w: %s", apperr.ErrFolderNotFound, path)
-	}
-	if err := st.AddFolder(ctx, path); err != nil {
+	abs, err := normalizeFolder(path)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Watching %s\n", path)
+	info, err := os.Stat(abs)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("%w: %s", apperr.ErrFolderNotFound, abs)
+	}
+	existing, err := findWatched(ctx, st, abs)
+	if err != nil {
+		return err
+	}
+	if existing != "" {
+		fmt.Fprintf(out, "Already watching %s\n", existing)
+		return nil
+	}
+	if legacy, err := findLegacyRelative(ctx, st, abs); err != nil {
+		return err
+	} else if legacy != "" {
+		fmt.Fprintf(out, "Already watching %s (stored as a relative path by an older bb).\n", legacy)
+		fmt.Fprintf(out, "To store it as %s instead, run `bb unwatch %s` then `bb watch %s`;\n", abs, legacy, abs)
+		fmt.Fprintln(out, "its files will then be uploaded again under the new, absolute names.")
+		return nil
+	}
+	if err := st.AddFolder(ctx, abs); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Watching %s\n", abs)
 	return nil
 }
 
 // Unwatch removes a folder from the watch list.
+//
+// path may be any spelling of a watched folder (trailing slash, relative, "~").
+// The exact stored text is tried first, so entries saved verbatim by older
+// versions (e.g. relative paths) can still be removed by what `bb list` shows.
+// The folder need not exist any more.
 func Unwatch(ctx context.Context, st *store.Store, path string, out io.Writer) error {
-	if err := st.RemoveFolder(ctx, path); err != nil {
+	err := st.RemoveFolder(ctx, path)
+	if err == nil {
+		fmt.Fprintf(out, "Stopped watching %s\n", path)
+		return nil
+	}
+	if !errors.Is(err, apperr.ErrFolderNotWatched) {
 		return err
 	}
-	fmt.Fprintf(out, "Stopped watching %s\n", path)
+	abs, nerr := normalizeFolder(path)
+	if nerr != nil {
+		return fmt.Errorf("%w: %s", apperr.ErrFolderNotWatched, path)
+	}
+	stored, ferr := findWatched(ctx, st, abs)
+	if ferr != nil {
+		return ferr
+	}
+	if stored == "" {
+		return fmt.Errorf("%w: %s", apperr.ErrFolderNotWatched, path)
+	}
+	if err := st.RemoveFolder(ctx, stored); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Stopped watching %s\n", stored)
 	return nil
+}
+
+// expandHome expands a leading "~", "~/" (or "~\" on Windows) in p using
+// home. Other forms (such as "~user") are left alone.
+func expandHome(p, home string) string {
+	if !isTildePath(p) {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	return filepath.Join(home, p[2:])
+}
+
+// isTildePath reports whether p is "~" or starts with "~/" (or "~" followed by
+// the OS path separator).
+func isTildePath(p string) bool {
+	return p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~"+string(filepath.Separator))
+}
+
+// normalizeFolder returns the absolute, cleaned form of a folder argument,
+// expanding a leading "~" (the shell doesn't, e.g. inside --folder=~/x or at
+// an interactive prompt). It does not check that the folder exists.
+func normalizeFolder(p string) (string, error) {
+	// filepath.Abs("") is the current directory: an empty argument (e.g. an
+	// unset shell variable in `bb watch "$DIR"`) must never mean "here".
+	if strings.TrimSpace(p) == "" {
+		return "", fmt.Errorf("%w: empty path", apperr.ErrFolderNotFound)
+	}
+	if isTildePath(p) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("%w: %s: home dir: %v", apperr.ErrFolderNotFound, p, err)
+		}
+		p = expandHome(p, home)
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %v", apperr.ErrFolderNotFound, p, err)
+	}
+	return abs, nil
+}
+
+// findLegacyRelative returns a stored relative entry (saved verbatim by bb
+// before watch paths were normalised) that resolves to abs from the current
+// directory, or "" if none.
+func findLegacyRelative(ctx context.Context, st *store.Store, abs string) (string, error) {
+	folders, err := st.ListFolders(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, f := range folders {
+		if filepath.IsAbs(f) {
+			continue
+		}
+		if r, err := filepath.Abs(f); err == nil && r == abs {
+			return f, nil
+		}
+	}
+	return "", nil
+}
+
+// findWatched returns the stored watch entry equivalent to abs (equal after
+// cleaning, e.g. "/a/b/" for "/a/b"), or "" if none.
+func findWatched(ctx context.Context, st *store.Store, abs string) (string, error) {
+	folders, err := st.ListFolders(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, f := range folders {
+		if filepath.Clean(f) == abs {
+			return f, nil
+		}
+	}
+	return "", nil
 }
 
 // List prints watched folders and tracked files with backup state.

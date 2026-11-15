@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -141,6 +144,70 @@ func TestVersionAndHelpCreateNoState(t *testing.T) {
 		}
 		if _, err := os.Stat(filepath.Join(home, "backup_repo")); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("run(%q) created ~/backup_repo (stat err %v)", args, err)
+		}
+	}
+}
+
+// TestUnknownCommandCreatesNoState is the regression for `bb bogus` (any typo)
+// creating ~/backup_repo before printing usage.
+func TestUnknownCommandCreatesNoState(t *testing.T) {
+	for _, args := range [][]string{{"bogus"}, {"staus"}, {"--nope"}} {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		if code := run(args); code != 1 {
+			t.Errorf("run(%q) = %d, want 1", args, code)
+		}
+		if _, err := os.Stat(filepath.Join(home, "backup_repo")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("run(%q) created ~/backup_repo (stat err %v)", args, err)
+		}
+	}
+}
+
+// TestIsCommandMatchesDispatch parses run's dispatch switch and checks every
+// case is accepted by isCommand, so adding a command without updating the
+// allowlist fails here instead of silently rejecting the new command.
+func TestIsCommandMatchesDispatch(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "run" {
+			return true
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			sw, ok := n.(*ast.SwitchStmt)
+			if !ok {
+				return true
+			}
+			if id, ok := sw.Tag.(*ast.Ident); !ok || id.Name != "cmd" {
+				return true
+			}
+			for _, st := range sw.Body.List {
+				for _, e := range st.(*ast.CaseClause).List {
+					if lit, ok := e.(*ast.BasicLit); ok {
+						cases = append(cases, strings.Trim(lit.Value, `"`))
+					}
+				}
+			}
+			return false
+		})
+		return false
+	})
+	if len(cases) < 15 {
+		t.Fatalf("found only %d dispatch cases %q; did run's `switch cmd` change shape?", len(cases), cases)
+	}
+	for _, c := range cases {
+		if !isCommand(c) {
+			t.Errorf("run dispatches %q but isCommand rejects it", c)
+		}
+	}
+	for _, bad := range []string{"bogus", "", "STATUS", "help", "version"} {
+		if isCommand(bad) {
+			t.Errorf("isCommand(%q) = true", bad)
 		}
 	}
 }

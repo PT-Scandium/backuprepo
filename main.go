@@ -47,6 +47,11 @@ func run(args []string) int {
 			usage(os.Stdout)
 			return 0
 		}
+		// Reject typos before config.Load / store.Open create ~/backup_repo.
+		if !isCommand(args[0]) {
+			usage(os.Stderr)
+			return 1
+		}
 	}
 
 	ctx := context.Background()
@@ -221,6 +226,20 @@ func run(args []string) int {
 		return fail(err)
 	}
 	return 0
+}
+
+// isCommand reports whether name is a subcommand run dispatches after opening
+// the store (version and help are answered earlier). Anything else is rejected
+// before any state is created. TestIsCommandMatchesDispatch parses run's
+// switch to keep this list in sync.
+func isCommand(name string) bool {
+	switch name {
+	case "init", "watch", "unwatch", "list", "status", "config", "upload",
+		"ls", "find", "get", "put", "rm", "backend", "bucket", "buckets",
+		"appkey", "start", "stop", "serve", "service":
+		return true
+	}
+	return false
 }
 
 // parseFlags parses args while allowing flags and positional arguments to

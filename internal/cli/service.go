@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"backuprepo/internal/apperr"
 	"backuprepo/internal/daemon"
@@ -53,9 +52,10 @@ func ServiceInstall(ctx context.Context, st *store.Store, mgr ServiceManager, fo
 	}
 	// A daemon started by hand (`bb start`) holds the PID lock; the unit would
 	// crash-loop on "already running". If the unit itself is the live daemon,
-	// restarting it is exactly what install wants. Liveness is only a signal-0
-	// probe, so after an unclean shutdown a reused PID can look alive: the error
-	// names the PID file instead of prescribing `bb stop` blindly.
+	// restarting it is exactly what install wants. On Linux a reused PID is
+	// recognised by its start time (ADR-023); macOS/Windows still use a plain
+	// liveness probe, so the error names the PID file instead of prescribing
+	// `bb stop` blindly.
 	if pid, running := daemon.RunningPID(stateDir); running && !mgr.Active(ctx) {
 		return fmt.Errorf("%w: %s names a live process (pid %d), so a daemon may already be running outside systemd; "+
 			"if it is bb, run `bb stop` first, otherwise delete that PID file",
@@ -74,7 +74,7 @@ func ServiceInstall(ctx context.Context, st *store.Store, mgr ServiceManager, fo
 	if err := mgr.Preflight(ctx, force); err != nil {
 		return err
 	}
-	if err := ensureWatched(ctx, st, path, out); err != nil {
+	if err := Watch(ctx, st, path, out); err != nil {
 		return err
 	}
 	return mgr.Install(ctx, deleteRemoved, force, out)
@@ -133,35 +133,12 @@ func ServiceStatus(ctx context.Context, mgr ServiceManager, out io.Writer) error
 // means ~/Documents, and a leading "~" is expanded here because the shell does
 // not expand it inside `--folder=~/x`.
 func resolveFolder(folder, home string) (string, error) {
-	switch {
-	case folder == "":
+	if folder == "" {
 		folder = filepath.Join(home, DefaultServiceFolder)
-	case folder == "~":
-		folder = home
-	case strings.HasPrefix(folder, "~/"):
-		folder = filepath.Join(home, folder[2:])
 	}
-	abs, err := filepath.Abs(folder)
+	abs, err := filepath.Abs(expandHome(folder, home))
 	if err != nil {
 		return "", fmt.Errorf("%w: %s: %v", apperr.ErrFolderNotFound, folder, err)
 	}
 	return abs, nil
-}
-
-// ensureWatched adds path to the watch list unless an equivalent entry (same
-// path after cleaning, e.g. with a trailing slash) is already there. Reusing
-// the stored spelling matters: remote object keys derive from the stored path,
-// so a near-duplicate entry would re-upload every file under new keys.
-func ensureWatched(ctx context.Context, st *store.Store, path string, out io.Writer) error {
-	folders, err := st.ListFolders(ctx)
-	if err != nil {
-		return err
-	}
-	for _, f := range folders {
-		if filepath.Clean(f) == path {
-			fmt.Fprintf(out, "Already watching %s\n", f)
-			return nil
-		}
-	}
-	return Watch(ctx, st, path, out)
 }
