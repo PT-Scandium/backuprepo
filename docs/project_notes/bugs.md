@@ -78,6 +78,12 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 - **Solution**: `normalizeFolder` + equivalent-entry matching in `Watch`/`Unwatch`; `isCommand` allowlist before `config.Load` (ADR-023).
 - **Prevention**: Normalise user-supplied paths at the boundary; answer/reject commands before creating state.
 
+### 2026-11-15 - Windows: exited daemon could look alive; no PID-reuse protection; case-sensitive folder matching
+- **Issue**: Windows `processAlive` treated "the process object can be opened" as alive (it survives exit while any handle is open); Windows had no start-time identity (ADR-023 was Linux-only), so a reused PID could be signalled/killed by `bb stop`; `C:\Users\X` and `c:\users\x` were different watch entries.
+- **Root Cause**: Unix-shaped liveness/identity; string-exact path comparison.
+- **Solution**: exit code `STILL_ACTIVE` check + `GetProcessTimes` creation time in `daemon.start`; `sameFolder` (EqualFold on Windows) in path-only folder matching (ADR-024; an `os.SameFile` variant was dropped after review — it hid real folders behind stored symlinks).
+- **Prevention**: Compare paths the way the OS does; never treat "handle opened" as "running" on Windows. (Not executed on Windows — see ADR-024.)
+
 Candidates that were caught during the build review (not bugs, but worth knowing — see decisions.md):
 - Root `errors.go` from the spec was infeasible (Go forbids `internal/` importing package `main`) → typed errors moved to `internal/apperr` (ADR-005).
 - SQLCipher requires CGO, conflicting with the static-binary goal → switched to pure-Go SQLite + AES-GCM field encryption (ADR-001).

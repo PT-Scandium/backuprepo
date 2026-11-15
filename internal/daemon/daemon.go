@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -323,7 +324,9 @@ func readPIDFile(dir string) (pidRecord, error) {
 		return pidRecord{}, err
 	}
 	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
+	// PIDs are positive and fit in 32 bits on every supported OS; a larger value
+	// would wrap to an unrelated PID in Windows' uint32 process APIs.
+	if err != nil || pid <= 0 || pid > math.MaxUint32 {
 		return pidRecord{}, fmt.Errorf("%w: corrupt pid file", apperr.ErrDaemon)
 	}
 	rec := pidRecord{pid: pid}

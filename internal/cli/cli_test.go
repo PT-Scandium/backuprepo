@@ -795,3 +795,69 @@ func TestInitFolderPromptExpandsTilde(t *testing.T) {
 		t.Errorf("stored %q", folders)
 	}
 }
+
+func TestSameFolder(t *testing.T) {
+	cases := []struct {
+		a, b, goos string
+		want       bool
+	}{
+		{`C:\Users\X\Docs`, `c:\users\x\docs`, "windows", true},
+		{`C:\Users\X\Docs`, `C:\Users\X\Other`, "windows", false},
+		{"/home/u/Docs", "/home/u/docs", "linux", false},
+		{"/home/u/Docs", "/home/u/Docs", "linux", true},
+		{"/Users/u/Docs", "/Users/u/docs", "darwin", false}, // macOS: handled by os.SameFile
+	}
+	for _, c := range cases {
+		if got := sameFolder(c.a, c.b, c.goos); got != c.want {
+			t.Errorf("sameFolder(%q, %q, %s) = %v, want %v", c.a, c.b, c.goos, got, c.want)
+		}
+	}
+}
+
+// TestWatchRealFolderWhenSymlinkStored is the regression for review finding
+// B1: a stored symlink root isn't descended by the backup walk, so watching
+// the real folder must add it rather than report "Already watching <link>".
+func TestWatchRealFolderWhenSymlinkStored(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	link := filepath.Join(base, "link")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	st := newStore(t)
+	if err := st.AddFolder(ctx, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := Watch(ctx, st, real, &bytes.Buffer{}); err != nil {
+		t.Fatalf("Watch(real): %v", err)
+	}
+	folders, _ := st.ListFolders(ctx)
+	found := false
+	for _, f := range folders {
+		found = found || f == real
+	}
+	if !found {
+		t.Errorf("real folder not added: %q", folders)
+	}
+}
+
+// TestUnwatchMissingFolderStillMatches: a stored folder that no longer exists
+// can't be compared with os.SameFile, but must still be removable by path.
+func TestUnwatchMissingFolderStillMatches(t *testing.T) {
+	ctx := context.Background()
+	gone := filepath.Join(t.TempDir(), "gone")
+	st := newStore(t)
+	if err := st.AddFolder(ctx, gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := Unwatch(ctx, st, gone+string(filepath.Separator), &bytes.Buffer{}); err != nil {
+		t.Fatalf("Unwatch: %v", err)
+	}
+	if folders, _ := st.ListFolders(ctx); len(folders) != 0 {
+		t.Errorf("not removed: %q", folders)
+	}
+}
