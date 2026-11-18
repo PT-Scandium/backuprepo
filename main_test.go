@@ -92,6 +92,67 @@ func TestUsageCoversAllCommandsAndModes(t *testing.T) {
 	}
 }
 
+// usageLine returns the help line that starts with "  <cmd>" plus its indented
+// continuation lines, so tests can check what is documented under a command.
+func usageLine(t *testing.T, out, cmd string) string {
+	t.Helper()
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		if !strings.HasPrefix(l, "  "+cmd+" ") {
+			continue
+		}
+		block := l
+		for _, next := range lines[i+1:] {
+			if !strings.HasPrefix(next, "                             ") { // continuation indent
+				break
+			}
+			block += "\n" + next
+		}
+		return block
+	}
+	t.Fatalf("usage has no line for %q", cmd)
+	return ""
+}
+
+// TestUsageAccuracy is the regression for help text that disagreed with the
+// code: --delete was described under stop (it is a start flag), --backend was
+// said to override upload (only ls/get/put/rm/find accept it), the version
+// example was a stale literal, and the help/version aliases were missing.
+func TestUsageAccuracy(t *testing.T) {
+	var buf bytes.Buffer
+	usage(&buf)
+	out := buf.String()
+
+	if start := usageLine(t, out, "start"); !strings.Contains(start, "--delete propagates") {
+		t.Errorf("start's help should describe --delete:\n%s", start)
+	}
+	if stop := usageLine(t, out, "stop"); strings.Contains(stop, "--delete") {
+		t.Errorf("stop takes no flags but its help mentions --delete:\n%s", stop)
+	}
+	for _, s := range []string{
+		`"bb X.Y.Z" (also --version, -v)`, // version output + aliases
+		"  help ", "-h, --help", // help command + aliases
+		"--backend s3|b2            override the stored backend for one ls / get / put / rm / find",
+		"used by upload, start, serve and all file operations",
+		"Override it for one ls / get / put / rm / find with  --backend s3|b2",
+	} {
+		if !strings.Contains(out, s) {
+			t.Errorf("usage missing %q", s)
+		}
+	}
+	for _, stale := range []string{"(e.g. 1.0.0)", "override the backend for one command", "applies to upload and all file operations"} {
+		if strings.Contains(out, stale) {
+			t.Errorf("usage still contains stale text %q", stale)
+		}
+	}
+	// upload and start must not advertise --backend: their FlagSets reject it.
+	for _, cmd := range []string{"upload", "start"} {
+		if line := usageLine(t, out, cmd); strings.Contains(line, "--backend") {
+			t.Errorf("%s's help mentions --backend, which it does not accept:\n%s", cmd, line)
+		}
+	}
+}
+
 // TestParseServiceArgs covers `bb service` dispatch validation, which runs
 // before any systemd or store access.
 func TestParseServiceArgs(t *testing.T) {

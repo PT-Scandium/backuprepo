@@ -418,7 +418,8 @@ USAGE
 SETUP
   init                       Interactive setup: credentials, bucket name, bucket ID, endpoint, region, first folder
   config                     Show current configuration (app key masked) + active backend
-  version                    Print the build version (e.g. 1.0.0)
+  version                    Print the build version as "bb X.Y.Z" (also --version, -v)
+  help                       Show this help (also -h, --help)
   bucket [<name> [<id>]]     Show, or switch to another bucket (keeps credentials). With <name> only,
                                the bucket ID is auto-resolved from the account; pass <id> to set it explicitly
   buckets                    List all buckets in the account with their IDs (always via the native B2 API)
@@ -435,8 +436,8 @@ BACKUP  (watch local folders, upload changed files)
 
 DAEMON  (background watcher: real-time fsnotify events + 5-min fallback scan)
   start [--delete]           Watch all folders and back up changes until stopped (foreground)
-  stop                       Signal a running daemon to shut down gracefully
                                --delete propagates local deletions to the remote (destructive)
+  stop                       Signal a running daemon to shut down gracefully
   serve                      Start the localhost web UI on http://127.0.0.1:9171 (foreground)
 
 SERVICE  (Linux: run the daemon in the background as a systemd user service)
@@ -446,10 +447,10 @@ SERVICE  (Linux: run the daemon in the background as a systemd user service)
   service uninstall          Stop, disable and remove the service (watched folders are kept)
   service status             Show whether the service is installed, enabled and running
 
-STORAGE BACKEND  (mode — applies to upload and all file operations)
+STORAGE BACKEND  (stored mode — used by upload, start, serve and all file operations)
   backend [s3|b2]            Show or set the backend. Default: s3
                                s3 = S3-compatible API (aws-sdk)    b2 = native Backblaze B2 API
-                             Override for one command with  --backend s3|b2
+                             Override it for one ls / get / put / rm / find with  --backend s3|b2
 
 MANUAL FILE OPERATIONS  (act directly on the bucket)
   ls [path] [-r]             List bucket contents (folders shown with trailing /)
@@ -460,7 +461,7 @@ MANUAL FILE OPERATIONS  (act directly on the bucket)
   find <query> [prefix]      Case-insensitive substring search of object names
 
 FLAGS
-  --backend s3|b2            override the backend for one command
+  --backend s3|b2            override the stored backend for one ls / get / put / rm / find
   -r                         recursive (ls / get / put / rm)
   -f, -y                     skip the rm confirmation prompt
 
