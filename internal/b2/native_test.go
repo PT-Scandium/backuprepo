@@ -22,13 +22,20 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 	var base string
 
 	mux.HandleFunc("/b2api/v3/b2_authorize_account", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := r.BasicAuth(); !ok {
+		keyID, _, ok := r.BasicAuth()
+		if !ok {
 			w.WriteHeader(401)
 			return
 		}
+		// keyID "restricted" simulates an application key restricted to
+		// "my-bucket"; its token is checked by b2_list_buckets below.
+		token := "test-token"
+		if keyID == "restricted" {
+			token = "restricted-token"
+		}
 		// v3 nests the storage-API endpoints under apiInfo.storageApi.
 		json.NewEncoder(w).Encode(map[string]any{
-			"authorizationToken": "test-token",
+			"authorizationToken": token,
 			"accountId":          "acct-1",
 			"apiInfo": map[string]any{
 				"storageApi": map[string]any{
@@ -41,19 +48,31 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 	})
 	mux.HandleFunc("/b2api/v3/b2_list_buckets", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			AccountID string `json:"accountId"`
+			AccountID  string `json:"accountId"`
+			BucketName string `json:"bucketName"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		if req.AccountID == "" {
 			w.WriteHeader(400)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"buckets": []map[string]any{
-				{"bucketName": "my-bucket", "bucketId": "bid", "bucketType": "allPrivate"},
-				{"bucketName": "other", "bucketId": "bid2", "bucketType": "allPublic"},
-			},
-		})
+		// Like real B2: a bucket-restricted token must name its own bucket,
+		// otherwise the call is unauthorized.
+		if r.Header.Get("Authorization") == "restricted-token" && req.BucketName != "my-bucket" {
+			w.WriteHeader(401)
+			return
+		}
+		all := []map[string]any{
+			{"bucketName": "my-bucket", "bucketId": "bid", "bucketType": "allPrivate"},
+			{"bucketName": "other", "bucketId": "bid2", "bucketType": "allPublic"},
+		}
+		buckets := []map[string]any{}
+		for _, bk := range all {
+			if req.BucketName == "" || bk["bucketName"] == req.BucketName {
+				buckets = append(buckets, bk)
+			}
+		}
+		json.NewEncoder(w).Encode(map[string]any{"buckets": buckets})
 	})
 	mux.HandleFunc("/b2api/v3/b2_get_upload_url", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
@@ -420,6 +439,68 @@ func TestB2ListBuckets(t *testing.T) {
 	}
 	if list[1].Name != "other" || list[1].ID != "bid2" {
 		t.Fatalf("bucket[1] = %+v", list[1])
+	}
+}
+
+// testB2Key is testB2 with a specific keyID ("restricted" makes the test server
+// treat the key as restricted to "my-bucket").
+func testB2Key(t *testing.T, srv *httptest.Server, keyID string) *B2Backend {
+	t.Helper()
+	b := testB2(t, srv)
+	b.cfg.KeyID = keyID
+	return b
+}
+
+// TestB2FindBucketRestrictedKey is the regression for bucket-ID auto-resolve
+// failing with a bucket-scoped key: B2 denies an unfiltered b2_list_buckets for
+// such keys, so the lookup must name the bucket.
+func TestB2FindBucketRestrictedKey(t *testing.T) {
+	srv := b2TestServer(t, map[string][]byte{})
+	ctx := context.Background()
+
+	// The old lookup path (list everything) is denied for a restricted key.
+	if _, err := testB2Key(t, srv, "restricted").ListBuckets(ctx); !errors.Is(err, apperr.ErrListFailed) {
+		t.Fatalf("ListBuckets with restricted key: err = %v, want ErrListFailed", err)
+	}
+	// Naming the bucket succeeds and returns just that bucket.
+	list, err := testB2Key(t, srv, "restricted").FindBucket(ctx, "my-bucket")
+	if err != nil {
+		t.Fatalf("FindBucket: %v", err)
+	}
+	if len(list) != 1 || list[0].Name != "my-bucket" || list[0].ID != "bid" {
+		t.Fatalf("FindBucket = %+v, want [my-bucket bid]", list)
+	}
+	// A bucket outside the key's restriction is refused, not silently empty.
+	if _, err := testB2Key(t, srv, "restricted").FindBucket(ctx, "other"); !errors.Is(err, apperr.ErrListFailed) {
+		t.Fatalf("FindBucket(other) with restricted key: err = %v, want ErrListFailed", err)
+	}
+}
+
+// TestB2FindBucketAccountKey verifies FindBucket filters by name for an
+// account-wide key and returns an empty list (no error) for an unknown name.
+func TestB2FindBucketAccountKey(t *testing.T) {
+	srv := b2TestServer(t, map[string][]byte{})
+	ctx := context.Background()
+
+	list, err := testB2(t, srv).FindBucket(ctx, "other")
+	if err != nil {
+		t.Fatalf("FindBucket: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != "bid2" {
+		t.Fatalf("FindBucket(other) = %+v, want [other bid2]", list)
+	}
+	list, err = testB2(t, srv).FindBucket(ctx, "missing")
+	if err != nil || len(list) != 0 {
+		t.Fatalf("FindBucket(missing) = %+v, %v; want empty, nil", list, err)
+	}
+}
+
+// TestB2FindBucketEmptyName verifies an empty name is rejected instead of
+// silently falling back to listing every bucket.
+func TestB2FindBucketEmptyName(t *testing.T) {
+	srv := b2TestServer(t, map[string][]byte{})
+	if _, err := testB2(t, srv).FindBucket(context.Background(), ""); !errors.Is(err, apperr.ErrListFailed) {
+		t.Fatalf("FindBucket(\"\"): err = %v, want ErrListFailed", err)
 	}
 }
 

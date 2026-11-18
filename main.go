@@ -73,7 +73,7 @@ func run(args []string) int {
 
 	switch cmd {
 	case "init":
-		err = cli.Init(ctx, st, os.Stdin, os.Stdout, b2.ListBuckets)
+		err = cli.Init(ctx, st, os.Stdin, os.Stdout, b2.FindBucket)
 	case "watch":
 		if len(rest) != 1 {
 			return fail(fmt.Errorf("usage: bb watch /path/to/dir"))
@@ -190,7 +190,7 @@ func run(args []string) int {
 		if len(rest) > 2 {
 			return fail(fmt.Errorf("usage: bb bucket [<name> [<bucket-id>]]"))
 		}
-		err = cli.Bucket(ctx, st, argAt(rest, 0), argAt(rest, 1), b2.ListBuckets, os.Stdout)
+		err = cli.Bucket(ctx, st, argAt(rest, 0), argAt(rest, 1), b2.FindBucket, os.Stdout)
 	case "buckets":
 		cfg, e := b2ConfigFromStore(ctx, st)
 		if e != nil {

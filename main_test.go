@@ -211,3 +211,47 @@ func TestIsCommandMatchesDispatch(t *testing.T) {
 		}
 	}
 }
+
+// TestBucketIDLookupWiring guards the bucket-scoped-key fix at its user-facing
+// wiring: init and bucket must resolve the bucket ID with b2.FindBucket (which
+// names the bucket in b2_list_buckets, as B2 requires for restricted keys), not
+// the unfiltered b2.ListBuckets. The cli tests stub the lister, so only this
+// test notices a regression in main.go.
+func TestBucketIDLookupWiring(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]bool{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		fn, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || fn.Sel.Name != "Init" && fn.Sel.Name != "Bucket" {
+			return true
+		}
+		if pkg, ok := fn.X.(*ast.Ident); !ok || pkg.Name != "cli" {
+			return true
+		}
+		for _, arg := range call.Args {
+			sel, ok := arg.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "b2" {
+				if sel.Sel.Name != "FindBucket" {
+					t.Errorf("cli.%s is passed b2.%s; want b2.FindBucket", fn.Sel.Name, sel.Sel.Name)
+				}
+				found[fn.Sel.Name] = true
+			}
+		}
+		return true
+	})
+	for _, name := range []string{"Init", "Bucket"} {
+		if !found[name] {
+			t.Errorf("no cli.%s call with a b2 bucket lookup found in main.go", name)
+		}
+	}
+}

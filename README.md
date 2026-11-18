@@ -101,7 +101,7 @@ Follow steps 1–3 once, then use mode 1, mode 2, or both.
 
 In the [Backblaze B2 console](https://secure.backblaze.com/b2_buckets.htm):
 
-1. **Pick or create a bucket.** Note its **name** (e.g. `my-backups`) and its **bucket ID** (alphanumeric, shown in the bucket list). `bb init` tries to look the ID up for you, but that needs a key allowed to list all buckets — with the bucket-scoped key recommended in step 2, expect it to ask for the ID.
+1. **Pick or create a bucket.** Note its **name** (e.g. `my-backups`) and its **bucket ID** (alphanumeric, shown in the bucket list). `bb init` looks the ID up from the name for you — a bucket-scoped key works as long as it has the `listBuckets` capability (shown with the key on the Application Keys page); it only asks for the ID if that lookup fails.
 2. **Application Keys → Add a New Application Key**, with read/write on that bucket. Backblaze shows a **keyID** and an **applicationKey** — copy both now; the applicationKey is shown only once. *(A bucket-scoped key is safer than your account master key.)*
 3. *(S3 backend only)* On the **Buckets** page note the **Endpoint** (e.g. `s3.us-west-004.backblazeb2.com`); the **region** is its middle segment (`us-west-004`).
 
@@ -123,11 +123,11 @@ Folder to watch (blank to skip): /home/me/Documents
 Watching /home/me/Documents
 ```
 
-The `Resolved bucket ID` line appears when the key may list all buckets. With a bucket-scoped key the lookup is refused, and `init` prints `Could not auto-resolve bucket ID (...); enter it manually.` followed by a `Bucket ID (for native B2 API):` prompt — paste the ID from the B2 console.
+If the lookup fails (for example the key lacks the `listBuckets` capability, or the name is misspelled), `init` prints why and asks `Bucket ID (for native B2 API):` instead — paste the ID from the B2 console.
 
 - Only the **applicationKey** is secret, and it is **not shown as you type** (paste it and press Enter — nothing appears). Re-run `init` anytime to reconfigure — it overwrites the saved config.
 - **Endpoint shortcuts:** paste the endpoint exactly as the Buckets page shows it (`https://` is added for you) and leave **region** blank — it's derived from `s3.<region>.backblazeb2.com`.
-- **Using only the native B2 backend?** Leave **endpoint** and **region** blank: `init` then switches to the `b2` backend automatically (it needs the bucket ID — looked up automatically when the key can list all buckets, otherwise entered at the prompt). With neither an endpoint nor a bucket ID, `init` refuses rather than save a config that can't upload. (Required: keyID, applicationKey, bucket name.)
+- **Using only the native B2 backend?** Leave **endpoint** and **region** blank: `init` then switches to the `b2` backend automatically (it needs the bucket ID — looked up automatically from the bucket name, or entered at the prompt if the lookup fails). With neither an endpoint nor a bucket ID, `init` refuses rather than save a config that can't upload. (Required: keyID, applicationKey, bucket name.)
 - **Run `init` in a real terminal.** With no interactive input (e.g. `bb init </dev/null`, or a `!` shell inside an AI agent), it stops with `error: bb: input ended before setup was complete (run `bb init` in an interactive terminal)`.
 - **Stay configured:** credentials persist encrypted on disk, so you never log in interactively again — each command silently re-authorizes with Backblaze using the saved key. You only re-run `init` if the key changes or is revoked.
 - **Switch buckets later:** to point `bb` at a *different* bucket without re-entering credentials, use `bb bucket <name>` — the bucket ID is auto-resolved from your account (pass `bb bucket <name> <id>` to set it explicitly; if the lookup fails the ID is cleared, which is fine for an S3-only bucket). It changes only the bucket name + ID. Note: the stored key must have access to the new bucket — a bucket-scoped key won't, so for a bucket under a different key, re-run `init` instead.
