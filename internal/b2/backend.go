@@ -37,9 +37,17 @@ type BucketInfo struct {
 
 // ListBuckets lists every bucket the credentials in cfg can see. It always uses
 // the native B2 API regardless of the configured backend, because enumerating
-// buckets and returning their IDs is a native-only capability.
+// buckets and returning their IDs is a native-only capability. A bucket-scoped
+// key is denied; resolve a single bucket with FindBucket instead.
 func ListBuckets(ctx context.Context, cfg Config) ([]BucketInfo, error) {
 	return newB2Backend(cfg).ListBuckets(ctx)
+}
+
+// FindBucket looks up the bucket named cfg.BucketName via the native B2 API and
+// returns it as a 0- or 1-element list. Use it (not ListBuckets) to resolve a
+// bucket ID: it also works for application keys restricted to that bucket.
+func FindBucket(ctx context.Context, cfg Config) ([]BucketInfo, error) {
+	return newB2Backend(cfg).FindBucket(ctx, cfg.BucketName)
 }
 
 // Uploader is the narrow write view the backup flow depends on.

@@ -374,11 +374,34 @@ func (b *B2Backend) List(ctx context.Context, prefix string, recursive bool) (Li
 
 // ListBuckets returns every bucket the credentials can see, with the bucket ID
 // the native list/upload calls need. Only the native B2 API exposes bucket IDs,
-// so this has no S3Backend equivalent.
+// so this has no S3Backend equivalent. B2 denies this unfiltered list for a key
+// restricted to one bucket; use FindBucket to look such a bucket up.
 func (b *B2Backend) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
+	return b.listBuckets(ctx, "")
+}
+
+// FindBucket looks up a single bucket by name and returns it as a 0- or
+// 1-element list. Unlike ListBuckets it names the bucket in the request, which
+// B2 requires when the application key is restricted to one bucket — an
+// unfiltered b2_list_buckets is denied for such keys — so it resolves the ID
+// for both bucket-scoped and account-wide keys.
+func (b *B2Backend) FindBucket(ctx context.Context, name string) ([]BucketInfo, error) {
+	if name == "" {
+		return nil, fmt.Errorf("%w: find bucket: empty bucket name", apperr.ErrListFailed)
+	}
+	return b.listBuckets(ctx, name)
+}
+
+// listBuckets calls b2_list_buckets, filtered to the bucket called name when
+// name is non-empty.
+func (b *B2Backend) listBuckets(ctx context.Context, name string) ([]BucketInfo, error) {
 	auth, err := b.authorize(ctx)
 	if err != nil {
 		return nil, err
+	}
+	body := map[string]string{"accountId": auth.AccountID}
+	if name != "" {
+		body["bucketName"] = name
 	}
 	var resp struct {
 		Buckets []struct {
@@ -387,8 +410,7 @@ func (b *B2Backend) ListBuckets(ctx context.Context) ([]BucketInfo, error) {
 			BucketType string `json:"bucketType"`
 		} `json:"buckets"`
 	}
-	if err := b.postJSON(ctx, auth, "b2_list_buckets",
-		map[string]string{"accountId": auth.AccountID}, &resp); err != nil {
+	if err := b.postJSON(ctx, auth, "b2_list_buckets", body, &resp); err != nil {
 		return nil, fmt.Errorf("%w: list buckets: %v", apperr.ErrListFailed, err)
 	}
 	out := make([]BucketInfo, 0, len(resp.Buckets))

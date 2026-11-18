@@ -14,6 +14,12 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 
 ## Entries
 
+### 2026-11-18 - Bucket-ID auto-resolve fails with bucket-scoped keys
+- **Issue**: `bb init` / `bb bucket <name>` couldn't resolve the bucket ID for an application key restricted to one bucket (the README-recommended setup), so users always got `Could not auto-resolve bucket ID (...)` and the manual prompt. Found in the 2026-11-18 docs audit; ADR-017 had claimed scoped keys still resolve their own bucket.
+- **Root Cause**: `ListBuckets` sent `b2_list_buckets` with `accountId` only. Backblaze's docs: a bucket-restricted token "must include the bucketId or bucketName of that bucket in the request, or the request will be denied". The unit-test mock accepted any token, so tests never saw the denial.
+- **Solution**: New `b2.FindBucket` sends `bucketName`; `resolveBucketID` passes the bucket name and `init`/`bucket` use `FindBucket`. Mock server now denies unfiltered lists for a restricted key. Tests: `TestB2FindBucketRestrictedKey`, `TestB2FindBucketAccountKey`, `TestB2FindBucketEmptyName`, `TestInitPassesBucketNameToLookup`, `TestBucketAutoResolvesID/passes_bucket_name_to_lookup`, and `TestBucketIDLookupWiring` (AST check that main.go passes `b2.FindBucket` to `cli.Init`/`cli.Bucket`).
+- **Prevention**: When mocking a third-party API, model its permission rules (restricted vs. unrestricted credentials), not just the happy-path response shape; check the provider's docs for per-credential restrictions before claiming behaviour in an ADR.
+
 ### 2026-07-06 - `bb put -r` aborts on a transient B2 pod failure (no upload retry) — FIXED v1.0.2
 - **Issue**: `bb put -r <dir>` uploaded N files then died mid-batch with `upload failed: upload <key>: Post "https://pod-050-1046-12.backblaze.com/.../b2_upload_file/...": dial tcp 149.137.140.146:443: connect: connection refused`. Re-running hit the **same dead pod** intermittently (still in B2's rotation) and re-uploaded everything each time.
 - **Root Cause**: B2 hands out a **per-pod upload URL** via `b2_get_upload_url`; that pod was briefly unreachable. `B2Backend.Upload` (and `uploadPart`) made a **single attempt** with no retry — so one dead pod failed the file, and `cli.Put`'s `WalkDir` callback returned the error, aborting the whole batch. Verified the main API was reachable (HTTP 401) while the specific pod refused (connection refused) — a transport-layer, single-pod issue, not auth/addressing.

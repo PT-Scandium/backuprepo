@@ -244,6 +244,23 @@ func TestBucketAutoResolvesID(t *testing.T) {
 		}
 	})
 
+	t.Run("passes bucket name to lookup", func(t *testing.T) {
+		// A bucket-scoped key can only be resolved by naming the bucket in
+		// b2_list_buckets, so the lookup must receive the requested name.
+		st, ctx := newCfg(t)
+		var got b2.Config
+		lister := func(_ context.Context, cfg b2.Config) ([]b2.BucketInfo, error) {
+			got = cfg
+			return []b2.BucketInfo{{Name: "new", ID: "resolved-id"}}, nil
+		}
+		if err := Bucket(ctx, st, "new", "", lister, &bytes.Buffer{}); err != nil {
+			t.Fatalf("Bucket: %v", err)
+		}
+		if got.BucketName != "new" || got.KeyID != "k" || got.AppKey != "secret" {
+			t.Fatalf("lookup cfg = %+v, want BucketName=new KeyID=k AppKey=secret", got)
+		}
+	})
+
 	t.Run("not found clears id", func(t *testing.T) {
 		st, ctx := newCfg(t)
 		lister := func(context.Context, b2.Config) ([]b2.BucketInfo, error) {
@@ -356,6 +373,34 @@ func TestInitBlankRequiredWithInput(t *testing.T) {
 	err := Init(context.Background(), st, strings.NewReader("\n\n\nmore\n"), &bytes.Buffer{}, nil)
 	if !errors.Is(err, apperr.ErrInvalidCredentials) || errors.Is(err, apperr.ErrNoInput) {
 		t.Fatalf("want ErrInvalidCredentials, got %v", err)
+	}
+}
+
+// TestInitPassesBucketNameToLookup is the cli-side regression for bucket-scoped
+// keys: Init must hand the entered bucket name to the lookup (b2.FindBucket
+// filters on it), and a found bucket skips the manual bucket-ID prompt.
+func TestInitPassesBucketNameToLookup(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	var got b2.Config
+	lister := func(_ context.Context, cfg b2.Config) ([]b2.BucketInfo, error) {
+		got = cfg
+		return []b2.BucketInfo{{Name: "my-bucket", ID: "scoped-bid"}}, nil
+	}
+	in := strings.NewReader(strings.Join([]string{
+		"0001keyid", "K001-secret", "my-bucket", // no bucket-ID answer: it must be resolved
+		"https://s3.example", "us-west-004", "",
+	}, "\n"))
+	var out bytes.Buffer
+	if err := Init(ctx, st, in, &out, lister); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	if got.BucketName != "my-bucket" || got.KeyID != "0001keyid" {
+		t.Fatalf("lookup cfg = %+v, want BucketName=my-bucket KeyID=0001keyid", got)
+	}
+	cfg, _ := st.GetConfig(ctx)
+	if cfg.BucketID != "scoped-bid" || cfg.Endpoint != "https://s3.example" {
+		t.Fatalf("saved bucket ID %q endpoint %q, want scoped-bid / https://s3.example", cfg.BucketID, cfg.Endpoint)
 	}
 }
 

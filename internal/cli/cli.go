@@ -26,15 +26,16 @@ import (
 	"backuprepo/internal/store"
 )
 
-// BucketLister looks up the account's buckets from credentials. It matches
-// b2.ListBuckets and is passed into Init so setup can auto-resolve the bucket ID
-// (and so tests can stub the lookup without network access). A nil lister
-// disables auto-resolution, leaving the manual bucket-ID prompt.
+// BucketLister looks up buckets from credentials; cfg.BucketName carries the
+// bucket being resolved. main.go wires b2.FindBucket, which filters by that name
+// so bucket-scoped keys work too. It is passed into Init/Bucket so setup can
+// auto-resolve the bucket ID (and so tests can stub the lookup without network
+// access). A nil lister disables auto-resolution, leaving the manual prompt.
 type BucketLister func(ctx context.Context, cfg b2.Config) ([]b2.BucketInfo, error)
 
 // Init runs interactive setup, reading answers from in and writing prompts to
 // out. lister is used to auto-resolve the bucket ID from its name; main.go wires
-// b2.ListBuckets.
+// b2.FindBucket.
 func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer, lister BucketLister) error {
 	r := bufio.NewReader(in)
 	inputEnded := false // set once the reader is exhausted (EOF)
@@ -139,7 +140,9 @@ func resolveBucketID(ctx context.Context, lister BucketLister, keyID, appKey, bu
 	if lister == nil {
 		return ""
 	}
-	list, err := lister(ctx, b2.Config{KeyID: keyID, AppKey: appKey})
+	// BucketName lets the lookup name the bucket in the request, which B2
+	// requires for keys restricted to a single bucket (see b2.FindBucket).
+	list, err := lister(ctx, b2.Config{KeyID: keyID, AppKey: appKey, BucketName: bucket})
 	if err != nil {
 		fmt.Fprintf(out, "Could not auto-resolve bucket ID (%v); enter it manually.\n", err)
 		return ""
@@ -150,7 +153,7 @@ func resolveBucketID(ctx context.Context, lister BucketLister, keyID, appKey, bu
 			return bk.ID
 		}
 	}
-	fmt.Fprintf(out, "Bucket %q not found among %d visible bucket(s); enter its ID manually.\n", bucket, len(list))
+	fmt.Fprintf(out, "Bucket %q not found in this account (or not visible to this key); enter its ID manually.\n", bucket)
 	return ""
 }
 
