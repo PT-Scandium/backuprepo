@@ -33,7 +33,7 @@ bb version                                   # -> bb 1.0.8
 
 ### Build from source
 
-Requires **Go 1.25+**. No CGO (pure-Go SQLite), so the build is a single **statically linked** binary that runs on any Linux host with no shared-library dependencies.
+Requires **Go 1.25.10+** (per `go.mod`). No CGO (pure-Go SQLite), so the build is a single **statically linked** binary that runs on any Linux host with no shared-library dependencies.
 
 ```sh
 make install        # build and copy `bb` to ~/.local/bin
@@ -47,7 +47,7 @@ sudo make install PREFIX=/usr/local/bin    # install system-wide
 make clean | uninstall | test | help       # housekeeping targets
 ```
 
-No `make`? `go build -ldflags="-s -w" -o bb .` produces the same binary. The stripped binary is ~21 MB.
+No `make`? `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bb .` produces the same static binary (without `CGO_ENABLED=0` a host with cgo enabled builds a dynamically linked one). The stripped binary is ~22 MB.
 
 > This guide uses the command **`bb`** (the installed name). If you only ran `make`, call it as `./bb` from the repo directory.
 
@@ -101,7 +101,7 @@ Follow steps 1–3 once, then use mode 1, mode 2, or both.
 
 In the [Backblaze B2 console](https://secure.backblaze.com/b2_buckets.htm):
 
-1. **Pick or create a bucket.** Note its **name** (e.g. `my-backups`) and its **bucket ID** (alphanumeric, shown in the bucket list).
+1. **Pick or create a bucket.** Note its **name** (e.g. `my-backups`) and its **bucket ID** (alphanumeric, shown in the bucket list). `bb init` tries to look the ID up for you, but that needs a key allowed to list all buckets — with the bucket-scoped key recommended in step 2, expect it to ask for the ID.
 2. **Application Keys → Add a New Application Key**, with read/write on that bucket. Backblaze shows a **keyID** and an **applicationKey** — copy both now; the applicationKey is shown only once. *(A bucket-scoped key is safer than your account master key.)*
 3. *(S3 backend only)* On the **Buckets** page note the **Endpoint** (e.g. `s3.us-west-004.backblazeb2.com`); the **region** is its middle segment (`us-west-004`).
 
@@ -114,7 +114,7 @@ $ bb init
 Backblaze keyID (access key ID): 0001abcdef0123456789
 Backblaze applicationKey (secret, input hidden):
 Bucket name: my-backups
-Bucket ID (for native B2 API): e73ede9969c64827
+Resolved bucket ID for "my-backups": e73ede9969c64827
 S3 endpoint URL (e.g. https://s3.us-west-004.backblazeb2.com; blank = native B2 API only): s3.us-west-004.backblazeb2.com
 S3 region (e.g. us-west-004; blank = derive from endpoint):
 Region: us-west-004 (from endpoint)
@@ -123,12 +123,14 @@ Folder to watch (blank to skip): /home/me/Documents
 Watching /home/me/Documents
 ```
 
+The `Resolved bucket ID` line appears when the key may list all buckets. With a bucket-scoped key the lookup is refused, and `init` prints `Could not auto-resolve bucket ID (...); enter it manually.` followed by a `Bucket ID (for native B2 API):` prompt — paste the ID from the B2 console.
+
 - Only the **applicationKey** is secret, and it is **not shown as you type** (paste it and press Enter — nothing appears). Re-run `init` anytime to reconfigure — it overwrites the saved config.
 - **Endpoint shortcuts:** paste the endpoint exactly as the Buckets page shows it (`https://` is added for you) and leave **region** blank — it's derived from `s3.<region>.backblazeb2.com`.
-- **Using only the native B2 backend?** Leave **endpoint** and **region** blank: `init` then switches to the `b2` backend automatically (it needs the bucket ID, which is usually resolved for you). With neither an endpoint nor a bucket ID, `init` refuses rather than save a config that can't upload. (Required: keyID, applicationKey, bucket name.)
+- **Using only the native B2 backend?** Leave **endpoint** and **region** blank: `init` then switches to the `b2` backend automatically (it needs the bucket ID — looked up automatically when the key can list all buckets, otherwise entered at the prompt). With neither an endpoint nor a bucket ID, `init` refuses rather than save a config that can't upload. (Required: keyID, applicationKey, bucket name.)
 - **Run `init` in a real terminal.** With no interactive input (e.g. `bb init </dev/null`, or a `!` shell inside an AI agent), it stops with `error: bb: input ended before setup was complete (run `bb init` in an interactive terminal)`.
 - **Stay configured:** credentials persist encrypted on disk, so you never log in interactively again — each command silently re-authorizes with Backblaze using the saved key. You only re-run `init` if the key changes or is revoked.
-- **Switch buckets later:** to point `bb` at a *different* bucket without re-entering credentials, use `bb bucket <name> <id>` (or `bb bucket <name>` for an S3-only bucket). It changes only the bucket name + ID. Note: the stored key must have access to the new bucket — a bucket-scoped key won't, so for a bucket under a different key, re-run `init` instead.
+- **Switch buckets later:** to point `bb` at a *different* bucket without re-entering credentials, use `bb bucket <name>` — the bucket ID is auto-resolved from your account (pass `bb bucket <name> <id>` to set it explicitly; if the lookup fails the ID is cleared, which is fine for an S3-only bucket). It changes only the bucket name + ID. Note: the stored key must have access to the new bucket — a bucket-scoped key won't, so for a bucket under a different key, re-run `init` instead.
 - **Rotate the application key:** `bb appkey` reads a new applicationKey from **stdin** (so the secret stays out of `argv` and shell history) and replaces the stored one. When you run it interactively the input is **not echoed** to the screen; you can also pipe it from a secret store, and pass the new keyID to rotate the whole pair:
   ```sh
   pass show backblaze/b2-key | bb appkey 0005newkeyid   # rotate keyID + secret
@@ -246,7 +248,7 @@ bb rm photos/ -r -f                      # delete a whole prefix, skip confirmat
 - **`rm` only deletes objects in the bucket — never your local files.** Each line reads `deleted (remote) <object>` and a recursive delete ends with `Deleted N object(s) from bucket "<name>". Local files were not touched.` Object names mirror local paths without the leading `/` (e.g. `home/me/Documents/a.txt`), which is why they can look local. All versions of each object are removed.
 
 - For `get`/`put`, the second path defaults to the basename if you omit it.
-- `rm` deletes **all versions** on the `b2` backend and **confirms** unless you pass `-f` or `-y`.
+- `rm` deletes **all versions** of each object (on both backends) and **confirms** unless you pass `-f` or `-y`.
 - **Flags go anywhere:** `-r`, `-f`, `-y`, and `--backend` may appear before, after, or between the path arguments — `bb rm photos/ -r -f` and `bb rm -r -f photos/` are equivalent.
 
 ### 5. Check your configuration — `bb config`
@@ -292,7 +294,7 @@ The applicationKey is masked (last 4 characters); the keyID is just an identifie
 | `bb backend [s3\|b2]` | Show or set the stored backend |
 | `bb ls [path] [-r]` | List bucket contents (folders shown with trailing `/`) |
 | `bb get <remote> [local] [-r]` | Download an object, or a prefix with `-r` |
-| `bb put <local> [remote] [-r]` | Upload a file, or a directory with `-r` |
+| `bb put <local> [remote] [-r] [--skip-existing]` | Upload a file, or a directory with `-r`; `--skip-existing` skips objects already in the bucket (presence-only) |
 | `bb rm <path> [-r] [-f]` | Delete an object/prefix **in the bucket** (local files untouched); confirms unless `-f`/`-y` |
 | `bb find <query> [prefix]` | Case-insensitive substring search of object names |
 | `bb version` | Print the version (also `--version`, `-v`) |

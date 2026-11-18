@@ -57,6 +57,8 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 
 ### ADR-004: Address B2 buckets by NAME, not bucket ID (2026-06-06)
 
+> **Superseded in part by ADR-010** (bucket ID also stored, for native B2 list/upload). _(Note added 2026-11-18.)_
+
 **Context:**
 - B2 has two identifiers: bucket name and numeric bucket ID. The user initially had the bucket ID.
 
@@ -146,6 +148,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 **Decision:**
 - Extend `store.RemoteConfig` with a `BucketID string` field, persisted to a new `bucket_id TEXT` column in the `config` table.
 - `backuprepo init` now prompts for the bucket ID (after the bucket name); it is optional (blank is allowed) so existing S3-only users are not forced to re-init.
+- **Update 2026-11-18:** the native client moved to the v3 API (ADR-011), and `init` now auto-resolves the ID from the bucket name, prompting only as a fallback (ADR-017).
 - `b2.Config` carries both `BucketName` (S3 + B2 download) and `BucketID` (B2 list/upload); each backend uses only what it needs.
 - A schema migration in `store.Open` adds `bucket_id` and `backend` columns to pre-existing databases via `ALTER TABLE config ADD COLUMN ...`.
 
@@ -191,7 +194,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ Cross-platform event watching from one small, pure-Go dependency — no CGO, static binary preserved, binary stays ~14 MB (ADR-007 unchanged in practice).
 - ✅ Reuses `UploadChanged`; the daemon is ~one package of glue, not a second change-detection engine.
 - ❌ First third-party *runtime* dependency added since the aws-sdk/sqlite baseline — a small supply-chain surface increase.
-- ❌ inotify is not recursive: subdirectories are watched individually and new dirs re-watched at runtime (`daemon.addRecursive` + the Create handler). Windows `ReadDirectoryChangesW` is natively recursive, so platform parity needs build-tagged code later (tracked in `issues.md`).
+- ❌ inotify is not recursive: subdirectories are watched individually and new dirs re-watched at runtime (`daemon.addRecursive` + the Create handler). Windows `ReadDirectoryChangesW` is natively recursive, so platform parity needs build-tagged code later (tracked in `issues.md`). **Update 2026-11-18:** not so in practice — fsnotify v1.10.1 disables recursive watches outside its own tests (`enableRecurse = false`), and `addRecursive` adds each directory, so Windows is watched per-directory exactly like Linux (see ADR-014); no build-tagged watcher was needed.
 
 ### ADR-013: Deletion propagation is opt-in, scoped to present watched folders, via an optional Deleter (2026-06-16)
 
@@ -236,7 +239,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ `go build`/`go vet` pass for both `GOOS=linux` and `GOOS=windows`; the right file is selected per platform from one codebase. Windows binary links (`PE32+`).
 - ✅ Foreground Ctrl-C is graceful on both OSes.
 - ❌ `bb stop` on Windows is forceful: the in-flight upload is aborted (retried next run) and the PID file is left stale (overwritten on next start). Documented in README. _(Superseded by ADR-016: Windows `stop` is now graceful via a named event; `proc.Kill` is only the fallback.)_
-- ❌ Windows `processAlive` is coarser than Unix's signal-0 (handle-open ≈ alive) — adequate for the double-start guard.
+- ❌ Windows `processAlive` is coarser than Unix's signal-0 (handle-open ≈ alive) — adequate for the double-start guard. **Update 2026-11-18:** stop was superseded by ADR-016 (graceful named stop event); liveness by ADR-024 (`OpenProcess` + exit code `STILL_ACTIVE` + creation-time identity).
 
 ### ADR-015: Web UI is localhost-only, unauthenticated, confined to watched folders; delete is local+remote with confirmation (2026-06-16)
 
@@ -270,7 +273,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - Two polish items from earlier ADRs: ADR-014 left Windows `bb stop` *forceful* (`proc.Kill`), losing the daemon's deferred cleanup; and `bb appkey` (the partial-reconfig credential command) read the secret from stdin with terminal **echo** during interactive entry.
 
 **Decision:**
-- **Graceful Windows stop via a named event.** On startup the daemon creates a per-PID manual-reset event `Local\backuprepo-daemon-stop-<pid>` and waits on it in a goroutine (`installStopWatcher`, build-tagged). `bb stop` opens that event by the PID from the PID file and `SetEvent`s it; the daemon's `Run` selects on the resulting channel and returns through its normal deferred cleanup (PID file removed, watcher closed). `proc.Kill` remains only as a fallback when the event can't be opened. Unix `installStopWatcher` is a no-op (SIGTERM already graceful). Uses `golang.org/x/sys/windows` — already a transitive dep, no new module.
+- **Graceful Windows stop via a named event.** On startup the daemon creates a per-PID manual-reset event `Local\backuprepo-daemon-stop-<pid>` and waits on it in a goroutine (`installStopWatcher`, build-tagged). `bb stop` opens that event by the PID from the PID file and `SetEvent`s it; the daemon's `Run` selects on the resulting channel and returns through its normal deferred cleanup (PID file removed, watcher closed). `proc.Kill` remains only as a fallback when the event can't be opened. Unix `installStopWatcher` is a no-op (SIGTERM already graceful). Uses `golang.org/x/sys/windows` — already a transitive dep, no new module. (**Update 2026-11-18:** this change itself promoted `x/sys` to a direct requirement in `go.mod`.)
 - **No-echo secret entry.** `cli.readSecret` reads without echo via `golang.org/x/term.ReadPassword` when stdin is an interactive terminal (`term.IsTerminal`), and falls back to a line read otherwise — preserving piping (`pass show … | bb appkey`) and unit tests (which pass a non-`*os.File` reader). Adds the small official `golang.org/x/term` module.
 
 **Alternatives Considered:**
@@ -303,7 +306,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 **Consequences:**
 - ✅ Users can browse all buckets (`bb buckets`) and switch in one word (`bb bucket <name>`), with the ID resolved and kept consistent with the name — closing the mismatch failure mode.
 - ✅ `Backend` interface unchanged; `var _ Backend = (*B2Backend)(nil)` still holds. New tests: `TestB2ListBuckets`, `TestInitBucketIDFallback`, `TestBucketAutoResolvesID`; full suite + vet + gofmt green.
-- ⚠️ `bb buckets` and auto-resolve need a key with account-wide **`listBuckets`** capability; a **bucket-scoped** key sees only its own bucket (still enough to resolve *that* bucket's ID during init).
+- ⚠️ `bb buckets` and auto-resolve need a key with account-wide **`listBuckets`** capability; a **bucket-scoped** key sees only its own bucket (still enough to resolve *that* bucket's ID during init). **Update 2026-11-18:** per Backblaze's `b2_list_buckets` docs, a bucket-restricted token must include that bucket's `bucketId` or `bucketName` "or the request will be denied" — `ListBuckets` sends only `accountId`, so with a scoped key auto-resolve most likely fails and init falls back to the manual prompt (not live-verified; see issues.md 2026-11-18).
 - ⚠️ `bb bucket <name>` (no id) changed meaning: it now **auto-resolves** the ID rather than clearing it. It still clears on a failed/not-found lookup, so the old S3-only "clear the ID" path remains reachable when the name isn't in the account.
 
 ### ADR-018: Retry B2 native uploads with a fresh upload URL on transient failures (2026-07-06)
@@ -327,7 +330,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ A single flaky pod no longer fails a file or aborts a `put -r` batch; uploads self-heal transparently. Matches B2's recommended client behavior.
 - ✅ Deterministic tests via a flaky-upload httptest server: retries-then-succeeds, fails-fast on 400, gives-up after 5. Full suite + vet + gofmt green; shipped as **v1.0.2**.
 - ⚠️ A hard-down account (every pod failing) now takes up to 5 attempts + ~3s of backoff before surfacing the error, instead of failing instantly — an acceptable trade for resilience.
-- ⚠️ `bb put` still re-uploads already-sent files on a re-run (no `Exists` skip yet) — harmless overwrite; tracked as a follow-up.
+- ⚠️ `bb put` still re-uploads already-sent files on a re-run (no `Exists` skip yet) — harmless overwrite; tracked as a follow-up. **Update 2026-11-18:** both deferred items (continue-past-failures and `--skip-existing`) shipped in v1.0.3 — see ADR-019.
 
 ### ADR-019: Resilient `put -r` — continue past failures + opt-in `--skip-existing` (2026-07-06)
 
@@ -365,7 +368,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 **Alternatives Considered:**
 - System unit with `User=` → Rejected: needs root, and HOME/state discovery under a system unit is fragile.
 - `Restart=always` → Rejected: would resurrect the daemon after a deliberate `bb stop`.
-- No start limit / infinite retries → Rejected: an unconfigured DB would crash-loop forever; startup does no network I/O, so the only transient startup failure is the stale/reused PID case (tracked as a follow-up), not enough to justify it.
+- No start limit / infinite retries → Rejected: an unconfigured DB would crash-loop forever; startup does no network I/O, so the only transient startup failure is the stale/reused PID case (tracked as a follow-up), not enough to justify it. **Update 2026-11-18:** the reused-PID case is resolved by ADR-023 (`daemon.start` identity; `writePID` overwrites a stale pair). Residual: a `daemon.pid` with no `daemon.start` (left by bb ≤ 1.0.6) still falls back to a plain liveness probe.
 - Detach/fork inside `bb start` → Rejected: the service manager should own process lifecycle; foreground + `Type=exec` sends stdout to journald for free.
 
 **Consequences:**
@@ -441,7 +444,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ⚠️ **macOS and Windows keep the old PID behaviour** _(Windows superseded by ADR-024)_ (no start time recorded → signal-0 / `FindProcess` liveness). Windows `stop` falls back to `proc.Kill` if the named event can't be opened, so PID reuse there could still hit another process — process creation time via `GetProcessTimes` would fix it (follow-up).
 - ⚠️ Not exercised with a live `bb start` (would contact Backblaze); `writePID`/`Stop` are unit-tested.
 
-### ADR-024: Windows PID identity via creation time; case-insensitive / same-directory folder matching (2026-11-15)
+### ADR-024: Windows PID identity via creation time; case-insensitive (path-only) folder matching (2026-11-15)
 
 **Context:**
 - ADR-023 left two Windows gaps: no process start time (so a reused PID could still be treated as the daemon — and Windows `bb stop` falls back to `proc.Kill`), and case-sensitive folder matching (`C:\Users\X` vs `c:\users\x` → duplicate entry, double upload).
