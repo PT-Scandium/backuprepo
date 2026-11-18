@@ -8,28 +8,28 @@ A cross-platform CLI that backs up your files to a Backblaze B2 bucket — eithe
 
 ## Install
 
-### Download a prebuilt binary (v1.0.9)
+### Download a prebuilt binary (v1.0.10)
 
-No Go toolchain needed — grab the static binary for your platform from the [**v1.0.9 release**](https://github.com/PT-Scandium/backuprepo/releases/tag/v1.0.9):
+No Go toolchain needed — grab the static binary for your platform from the [**v1.0.10 release**](https://github.com/PT-Scandium/backuprepo/releases/tag/v1.0.10):
 
 | Platform | Download |
 |----------|----------|
-| Linux (x86-64) | [`bb-v1.0.9-linux-amd64`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.9/bb-v1.0.9-linux-amd64) |
-| Windows (x86-64) | [`bb-v1.0.9-windows-amd64.exe`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.9/bb-v1.0.9-windows-amd64.exe) |
-| Checksums | [`SHA256SUMS`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.9/SHA256SUMS) |
+| Linux (x86-64) | [`bb-v1.0.10-linux-amd64`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.10/bb-v1.0.10-linux-amd64) |
+| Windows (x86-64) | [`bb-v1.0.10-windows-amd64.exe`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.10/bb-v1.0.10-windows-amd64.exe) |
+| Checksums | [`SHA256SUMS`](https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.10/SHA256SUMS) |
 
 **Linux:**
 
 ```sh
-curl -LO https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.9/bb-v1.0.9-linux-amd64
-curl -LO https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.9/SHA256SUMS
+curl -LO https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.10/bb-v1.0.10-linux-amd64
+curl -LO https://github.com/PT-Scandium/backuprepo/releases/download/v1.0.10/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing     # verify the download
-chmod +x bb-v1.0.9-linux-amd64
-sudo mv bb-v1.0.9-linux-amd64 /usr/local/bin/bb
-bb version                                   # -> bb 1.0.9
+chmod +x bb-v1.0.10-linux-amd64
+sudo mv bb-v1.0.10-linux-amd64 /usr/local/bin/bb
+bb version                                   # -> bb 1.0.10
 ```
 
-**Windows:** download `bb-v1.0.9-windows-amd64.exe` (optionally verify it against `SHA256SUMS`), rename it to `bb.exe`, and place it on your `PATH` — step by step in [**Windows quick start**](#windows-quick-start) below.
+**Windows:** download `bb-v1.0.10-windows-amd64.exe` (optionally verify it against `SHA256SUMS`), rename it to `bb.exe`, and place it on your `PATH` — step by step in [**Windows quick start**](#windows-quick-start) below.
 
 ### Build from source
 
@@ -59,11 +59,11 @@ Install, log in, and upload — using the **native B2 backend** (no S3 endpoint 
 |---|------|--------------------|
 | 1 | Open PowerShell | Press **Windows key** → type `powershell` → **Enter** |
 | 2 | Create a folder for the tool | `mkdir $env:LOCALAPPDATA\Programs\bb` |
-| 3 | Move the download and rename it | `move $env:USERPROFILE\Downloads\bb-v1.0.9-windows-amd64.exe $env:LOCALAPPDATA\Programs\bb\bb.exe` |
+| 3 | Move the download and rename it | `move $env:USERPROFILE\Downloads\bb-v1.0.10-windows-amd64.exe $env:LOCALAPPDATA\Programs\bb\bb.exe` |
 | 4 | Remove the "downloaded from internet" block | `Unblock-File $env:LOCALAPPDATA\Programs\bb\bb.exe` |
 | 5 | Add it to your `PATH` | `[Environment]::SetEnvironmentVariable("Path",[Environment]::GetEnvironmentVariable("Path","User")+";$env:LOCALAPPDATA\Programs\bb","User")` |
 | 6 | Reopen PowerShell | Close the window → **Windows key** → `powershell` → **Enter** (`PATH` only applies to new windows) |
-| 7 | Check the install | `bb version` → prints `bb 1.0.9` |
+| 7 | Check the install | `bb version` → prints `bb 1.0.10` |
 | 8 | Start setup | `bb init` |
 | 9 | Answer the credential prompts | Paste **keyID** → **Enter**, paste **applicationKey** → **Enter**, type **bucket name** → **Enter** |
 | 10 | Bucket ID | Resolved automatically. If it still asks, paste the **Bucket ID** from the B2 console → **Enter** |
@@ -352,7 +352,7 @@ Two buttons at the bottom: **Upload changed files** (runs a backup now) and **Cl
 
 ## Roadmap
 
-Feature-complete against the original spec; current release **v1.0.9**. Design notes live in `docs/superpowers/`, decisions in `docs/project_notes/decisions.md`. Possible next steps (none blocking):
+Feature-complete against the original spec; current release **v1.0.10**. Design notes live in `docs/superpowers/`, decisions in `docs/project_notes/decisions.md`. Possible next steps (none blocking):
 
 - A Windows CI job (`go test ./...` on `windows-latest`) — the Windows-specific daemon and path code is compiled and vetted but not yet run on Windows.
 - A leaner binary (~22 MB today).
