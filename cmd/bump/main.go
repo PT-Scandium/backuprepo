@@ -3,8 +3,8 @@
 // Usage: go run ./cmd/bump [major|minor|patch]   (default: patch)
 //
 // It reads ./VERSION, computes the next version per the scheme in
-// internal/version (each component wraps 0..20 with carry, e.g. 1.0.20 ->
-// 1.1.0), writes it back, and prints "old -> new".
+// internal/version (minor and patch wrap 0..20 with carry, e.g. 1.0.20 ->
+// 1.1.0; major is unbounded), writes it back, and prints "old -> new".
 package main
 
 import (

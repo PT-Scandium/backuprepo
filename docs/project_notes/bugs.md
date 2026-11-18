@@ -14,6 +14,12 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 
 ## Entries
 
+### 2026-11-18 - `make bump` breaks after the version reaches major 21
+- **Issue**: A patch bump at `20.20.20`, a minor bump at `20.20.x`, or a major bump at `20.x.x` wrote `21.0.0` to VERSION; the next `make bump*` then failed with `version "21.0.0": component "21" must be an integer 0..20`. Latent (current version 1.0.9); found in the 2026-11-18 docs audit.
+- **Root Cause**: `version.Parse` applied the `0..Max` bound to all three components, while `Bump` (and the package doc) treat major as unbounded.
+- **Solution**: `Parse` bounds only minor/patch; major is any non-negative integer. Tests `TestParseUnboundedMajor`, `TestBumpOutputAlwaysParses` (every Bump output must parse back), and end-to-end `cmd/bump` `TestRunBumpsPastMajor20`.
+- **Prevention**: When a type has a producer and a parser, test the round trip (`Parse(Bump(v).String())`) at the boundaries, not each side alone.
+
 ### 2026-11-18 - Bucket-ID auto-resolve fails with bucket-scoped keys
 - **Issue**: `bb init` / `bb bucket <name>` couldn't resolve the bucket ID for an application key restricted to one bucket (the README-recommended setup), so users always got `Could not auto-resolve bucket ID (...)` and the manual prompt. Found in the 2026-11-18 docs audit; ADR-017 had claimed scoped keys still resolve their own bucket.
 - **Root Cause**: `ListBuckets` sent `b2_list_buckets` with `accountId` only. Backblaze's docs: a bucket-restricted token "must include the bucketId or bucketName of that bucket in the request, or the request will be denied". The unit-test mock accepted any token, so tests never saw the denial.

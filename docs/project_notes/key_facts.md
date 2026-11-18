@@ -15,13 +15,13 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
 
 - Build command: `make` → `./bb`, or `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bb .` (without `CGO_ENABLED=0` a cgo-enabled host produces a dynamically linked binary)
 - **Makefile**: `make` builds a single static binary named **`bb`** (short for Backblaze) with `CGO_ENABLED=0 -trimpath -ldflags="-s -w"`; `make install` copies it to `$(PREFIX)` (default `~/.local/bin`). Other targets: `all`/`build`, `version`, `clean`, `uninstall`, `test`, `vet`, `fmt` (rewrites files), `tidy`, `help` (+ bump targets below). There is **no** `coverage` or `lint` target and **no CI** (no `.github/`). The binary name does not change behavior.
-- Stripped binary size: ~22 MB (22,577,312 bytes for v1.0.8 linux-amd64; see decisions.md ADR-007, which accepted ~14 MB; grew with fsnotify + x/term); statically linked (no CGO), cross-compiles cleanly to Windows.
+- Stripped binary size: ~22 MB (22,577,312 bytes for v1.0.8 and v1.0.9 linux-amd64; see decisions.md ADR-007, which accepted ~14 MB; grew with fsnotify + x/term); statically linked (no CGO), cross-compiles cleanly to Windows.
 - Test suite: `go test ./...`
 
 ### Versioning
 
 - **Source of truth:** the root `VERSION` file (e.g. `1.0.0`). It is **embedded into the binary** via `//go:embed` in `main.go`; `bb version` (`--version`/`-v`) prints it. Released as git tag `v<VERSION>` (e.g. `v1.0.0`) — first release tagged 2026-06-16.
-- **Scheme** (`internal/version`, odometer): `major.minor.patch`, each component `0..20`; incrementing past 20 wraps to 0 and carries into the next-higher component — `1.0.20 → 1.1.0`, `1.20.20 → 2.0.0`. **Major is the top component** — `Bump` never wraps it, but `Parse` rejects any component > 20 *including major*, so a `21.x.x` VERSION would be written by `bump-major` and then fail to parse (latent bug, see issues.md 2026-11-18). Unit-tested apart from that edge.
+- **Scheme** (`internal/version`, odometer): `major.minor.patch`; minor and patch run `0..20`, and incrementing past 20 wraps to 0 and carries into the next-higher component — `1.0.20 → 1.1.0`, `1.20.20 → 2.0.0`. **Major is unbounded**: `Bump` never wraps it and `Parse` accepts any non-negative major (fixed 2026-11-18 — `Parse` used to cap major at 20, so a VERSION of `21.0.0` written by a bump could not be bumped again). `internal/version` 100% covered; `cmd/bump` has end-to-end tests (63.2%: `main`/write-error untested).
 - **Bump:** `make bump` (patch, with carry), `make bump-minor`, `make bump-major` — or `go run ./cmd/bump [major|minor|patch]`. The tool rewrites `VERSION`; rebuild to bake the new value into the binary.
 - **Current release: v1.0.9** (2026-11-18). **Release process:** feature branch → independent review → `--no-ff` merge to `master` → `chore: bump version to X` → annotated tag `vX` (`vX — <summary>`) → GitHub release (`gh release create vX --verify-tag --latest`) with `bb-vX-linux-amd64`, `bb-vX-windows-amd64.exe`, `SHA256SUMS`, built from the tag with `CGO_ENABLED=0 -trimpath -ldflags="-s -w"` → `docs: vX — README links + notes` → install the published Linux asset to `~/.local/bin/bb` (a local rebuild differs: Go embeds `vcs.revision`).
 
@@ -47,7 +47,7 @@ Non-sensitive project configuration and constants for backuprepo. **Never store 
   - **Upload retry (v1.0.2, ADR-018):** `uploadWithRetry` retries both `b2_upload_file` and `b2_upload_part` up to **`b2MaxUploadAttempts` = 5** times, fetching a **fresh upload URL each attempt** (B2 issues a per-pod URL; a pod can be transiently unreachable). Retryable = connection errors + `408/429/500/502/503/504` + `401` (re-auths); every other upload-POST status fails fast (a failure fetching the upload URL / re-authorizing is always retried). Backoff 200→400→800→1600 ms between the 5 attempts (3 s cap never reached), ctx-aware.
 - **Account-level (native only):** `b2.ListBuckets(ctx, cfg)` / `(*B2Backend).ListBuckets` list all buckets (name + ID + type) — needs an account-wide key. `b2.FindBucket(ctx, cfg)` / `(*B2Backend).FindBucket` look up only `cfg.BucketName` by sending `bucketName` in `b2_list_buckets`, which B2 requires for bucket-scoped keys; `init`/`bucket` ID auto-resolve uses it. Deliberately **not** on the `b2.Backend` interface (per-bucket ops only); `ListBuckets` backs `bb buckets`; `FindBucket` backs the `init`/`bucket` ID auto-resolution. See ADR-017.
 - Stored in `backend TEXT` column of `config` table; `NULL`/empty defaults to `"s3"`.
-- Switch with `bb backend [s3|b2]`; override per-command with `--backend s3|b2`.
+- Switch with `bb backend [s3|b2]`; override for one `ls`/`get`/`put`/`rm`/`find` with `--backend s3|b2` (`upload`/`start` reject it).
 
 ### Backblaze B2 configuration
 

@@ -80,6 +80,50 @@ func TestBumpMajor(t *testing.T) {
 	}
 }
 
+// TestParseUnboundedMajor is the regression for Parse rejecting a major above
+// Max: Bump carries into major without bound (20.20.20 -> 21.0.0), so the next
+// `make bump` failed to parse the VERSION it had just written.
+func TestParseUnboundedMajor(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want V
+	}{
+		{"21.0.0", V{21, 0, 0}},
+		{"100.20.20", V{100, 20, 20}},
+	} {
+		got, err := Parse(tc.in)
+		if err != nil || got != tc.want {
+			t.Fatalf("Parse(%q) = %v, %v; want %v", tc.in, got, err, tc.want)
+		}
+	}
+	// Minor and patch stay bounded even when major is large.
+	for _, in := range []string{"21.21.0", "21.0.21", "-21.0.0"} {
+		if _, err := Parse(in); err == nil {
+			t.Fatalf("Parse(%q) should have errored", in)
+		}
+	}
+}
+
+// TestBumpOutputAlwaysParses checks the invariant the bug broke: every version
+// Bump produces must parse back, including carries past major 20.
+func TestBumpOutputAlwaysParses(t *testing.T) {
+	for _, in := range []string{"20.20.20", "20.20.19", "20.19.20", "0.0.0", "21.20.20"} {
+		for _, part := range []string{"patch", "minor", "major"} {
+			v, err := Parse(in)
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", in, err)
+			}
+			next, err := v.Bump(part)
+			if err != nil {
+				t.Fatalf("%s bump %s: %v", in, part, err)
+			}
+			if back, err := Parse(next.String()); err != nil || back != next {
+				t.Fatalf("%s bump %s = %s, which parses as %v, %v", in, part, next, back, err)
+			}
+		}
+	}
+}
+
 // TestBumpUnknownPart rejects parts other than major/minor/patch.
 func TestBumpUnknownPart(t *testing.T) {
 	v, _ := Parse("1.0.0")
