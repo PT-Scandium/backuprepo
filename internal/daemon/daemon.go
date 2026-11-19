@@ -116,7 +116,7 @@ func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
 	d.flush(ctx, out)
 
 	// Changed paths flow from the event loop into the debouncer goroutine, which
-	// decides when to actually trigger a backup (see debounce's TODO).
+	// decides when to actually trigger a backup (see debounce).
 	events := make(chan string, 1024)
 	go d.debounce(ctx, events, func() { d.flush(ctx, out) })
 
@@ -137,16 +137,18 @@ func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
 			if !ok {
 				return nil
 			}
-			// inotify is not recursive: a newly created directory needs its own
-			// watch, or changes inside it would go unnoticed until the next scan.
+			// fsnotify watches are not recursive: a newly created directory
+			// needs its own watch, or changes inside it would go unnoticed
+			// until the next scan.
 			if ev.Op&fsnotify.Create != 0 {
 				if info, statErr := os.Stat(ev.Name); statErr == nil && info.IsDir() {
 					_ = addRecursive(w, ev.Name)
 				}
 			}
-			// React to content-affecting ops. Chmod is metadata-only; Remove is
-			// ignored because the backup flow is upload-only (it does not delete
-			// remote objects when a local file disappears). Rename matters because
+			// React to content-affecting ops. Chmod is metadata-only. Remove does
+			// not trigger a flush: deletion propagation is opt-in (--delete) and
+			// runs inside every flush, so a removal is picked up by the next
+			// event-driven flush or the fallback scan. Rename matters because
 			// many editors save atomically (write temp, rename over the target).
 			if ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename) != 0 {
 				select {
@@ -173,7 +175,7 @@ func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
 // possible. A single editor save emits several events and a bulk copy emits
 // hundreds; without coalescing each one would trigger a full re-scan.
 //
-// Strategy (tunable via the constants below):
+// Strategy (tunable via the Daemon's quietWindow and maxDelay fields, set in New):
 //   - quietWindow (1s): flush once events have stayed quiet this long. Reset on
 //     every event, so a flush lands shortly after writes settle — long enough to
 //     avoid uploading a file mid-save, short enough to feel prompt.
@@ -245,11 +247,11 @@ func (d *Daemon) flush(ctx context.Context, out io.Writer) {
 	}
 }
 
-// addRecursive adds a watch on root and every subdirectory beneath it. The Linux
-// fsnotify backend (inotify) watches a single directory, not a subtree, so each
-// dir must be added explicitly — and newly created dirs re-added at runtime (the
-// Create handler in Run does that). On Windows, ReadDirectoryChangesW is natively
-// recursive, so a future platform-specific build could simplify this.
+// addRecursive adds a watch on root and every subdirectory beneath it. fsnotify
+// watches a single directory per Add on every platform: inotify cannot watch a
+// subtree, and although ReadDirectoryChangesW can, fsnotify v1.10 keeps its
+// recursive mode disabled. So each dir must be added explicitly, and newly
+// created dirs added at runtime (the Create handler in Run does that).
 func addRecursive(w *fsnotify.Watcher, root string) error {
 	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -306,7 +308,7 @@ func RunningPID(dir string) (int, bool) {
 }
 
 // pidRecord identifies the running daemon: its PID (daemon.pid) and, where the
-// OS exposes it (Linux), its start time (daemon.start).
+// OS exposes it (Linux and Windows), its start time (daemon.start).
 type pidRecord struct {
 	pid   int
 	start string // "" if unknown
@@ -379,9 +381,9 @@ func pidPath(dir string) string { return filepath.Join(dir, "daemon.pid") }
 // startPath returns the file recording the daemon's "<pid> <starttime>".
 func startPath(dir string) string { return filepath.Join(dir, "daemon.start") }
 
-// writePID records the current PID (and, on Linux, its start time in a
-// separate file — see readPIDFile), refusing
-// to start if a live daemon is found. A stale file — dead process, or a PID
+// writePID records the current PID (and, on Linux and Windows, its start time
+// in a separate file — see readPIDFile), refusing to start if a live daemon is
+// found. A stale file — dead process, or a PID
 // since reused by another process — is overwritten.
 func writePID(dir string) error {
 	if rec, err := readPIDFile(dir); err == nil && rec.alive() {

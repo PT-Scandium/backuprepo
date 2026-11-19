@@ -850,7 +850,7 @@ func TestSameFolder(t *testing.T) {
 		{`C:\Users\X\Docs`, `C:\Users\X\Other`, "windows", false},
 		{"/home/u/Docs", "/home/u/docs", "linux", false},
 		{"/home/u/Docs", "/home/u/Docs", "linux", true},
-		{"/Users/u/Docs", "/Users/u/docs", "darwin", false}, // macOS: handled by os.SameFile
+		{"/Users/u/Docs", "/Users/u/docs", "darwin", false}, // macOS volumes may be case-sensitive: no folding guessed
 	}
 	for _, c := range cases {
 		if got := sameFolder(c.a, c.b, c.goos); got != c.want {
@@ -891,7 +891,7 @@ func TestWatchRealFolderWhenSymlinkStored(t *testing.T) {
 }
 
 // TestUnwatchMissingFolderStillMatches: a stored folder that no longer exists
-// can't be compared with os.SameFile, but must still be removable by path.
+// on disk must still be removable by path.
 func TestUnwatchMissingFolderStillMatches(t *testing.T) {
 	ctx := context.Background()
 	gone := filepath.Join(t.TempDir(), "gone")

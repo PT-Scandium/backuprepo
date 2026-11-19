@@ -52,8 +52,8 @@ func ServiceInstall(ctx context.Context, st *store.Store, mgr ServiceManager, fo
 	}
 	// A daemon started by hand (`bb start`) holds the PID lock; the unit would
 	// crash-loop on "already running". If the unit itself is the live daemon,
-	// restarting it is exactly what install wants. On Linux a reused PID is
-	// recognised by its start time (ADR-023); macOS/Windows still use a plain
+	// restarting it is exactly what install wants. On Linux and Windows a reused
+	// PID is recognised by its start time (ADR-023/024); other OSes use a plain
 	// liveness probe, so the error names the PID file instead of prescribing
 	// `bb stop` blindly.
 	if pid, running := daemon.RunningPID(stateDir); running && !mgr.Active(ctx) {

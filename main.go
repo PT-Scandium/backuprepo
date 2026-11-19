@@ -1,6 +1,7 @@
-// Command backuprepo uploads changed files from watched folders to a Backblaze
-// B2 bucket via the S3-compatible API. This binary covers the core CLI; the
-// background daemon and web UI are separate follow-up work.
+// Command backuprepo (installed as bb) backs up watched folders to a Backblaze
+// B2 bucket over the S3-compatible API or the native B2 API. It dispatches the
+// CLI subcommands, including the background daemon (start/stop), the localhost
+// web UI (serve) and the systemd user service (service).
 package main
 
 import (
@@ -33,8 +34,9 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-// run loads config, opens the store, dispatches the subcommand, and returns an
-// exit code (0 success, 1 error).
+// run answers version/help requests and rejects unknown commands without
+// touching state, then loads config, opens the store, dispatches the
+// subcommand, and returns an exit code (0 success, 1 error).
 func run(args []string) int {
 	// version/help need no state: answer them before config.Load / store.Open,
 	// which create ~/backup_repo, its master key and an empty database.
@@ -43,7 +45,8 @@ func run(args []string) int {
 		case "version", "--version", "-v":
 			fmt.Fprintf(os.Stdout, "bb %s\n", strings.TrimSpace(versionFile))
 			return 0
-		case "help", "-h", "--help":
+		}
+		if args[0] == "help" || isHelpArg(args[0]) {
 			usage(os.Stdout)
 			return 0
 		}
@@ -51,6 +54,12 @@ func run(args []string) int {
 		if !isCommand(args[0]) {
 			usage(os.Stderr)
 			return 1
+		}
+		// `bb <cmd> -h` asks for help, so answer it before any state exists and
+		// before a command like init, stop or watch could act on it.
+		if helpRequested(args[1:]) {
+			usage(os.Stdout)
+			return 0
 		}
 	}
 
@@ -242,6 +251,37 @@ func isCommand(name string) bool {
 	return false
 }
 
+// helpRequested reports whether args (a subcommand's arguments) ask for help
+// (see isHelpArg). It checks every argument, not just the first, so
+// `bb ls photos/ -h` counts. It stops at "--", so `bb find -- -h` still
+// searches for "-h" (parseFlags protects only the first argument after "--",
+// so a later "-h" there still reaches the flag package). Commands that take
+// only positionals (watch, bucket, appkey, backend, ...) would otherwise treat
+// "-h" as a path, bucket or key name, and init/stop/list would ignore it and
+// run. A flag value of "-h" (`--folder -h`) also counts as help.
+func helpRequested(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if isHelpArg(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// isHelpArg reports whether a is a spelling the flag package treats as a help
+// request: -h, --h, -help or --help, with or without an "=value" suffix.
+func isHelpArg(a string) bool {
+	name, _, _ := strings.Cut(a, "=")
+	switch name {
+	case "-h", "--h", "-help", "--help":
+		return true
+	}
+	return false
+}
+
 // parseFlags parses args while allowing flags and positional arguments to
 // appear in any order, returning the positionals. The stdlib flag parser stops
 // at the first non-flag token, so we resume parsing after each positional —
@@ -419,7 +459,7 @@ SETUP
   init                       Interactive setup: credentials, bucket name, bucket ID, endpoint, region, first folder
   config                     Show current configuration (app key masked) + active backend
   version                    Print the build version as "bb X.Y.Z" (also --version, -v)
-  help                       Show this help (also -h, --help)
+  help                       Show this help (also -h, --help, or <command> -h)
   bucket [<name> [<id>]]     Show, or switch to another bucket (keeps credentials). With <name> only,
                                the bucket ID is auto-resolved from the account; pass <id> to set it explicitly
   buckets                    List all buckets in the account with their IDs (always via the native B2 API)
