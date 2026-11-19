@@ -298,7 +298,7 @@ The applicationKey is masked (last 4 characters); the keyID is just an identifie
 | `bb rm <path> [-r] [-f]` | Delete an object/prefix **in the bucket** (local files untouched); confirms unless `-f`/`-y` |
 | `bb find <query> [prefix]` | Case-insensitive substring search of object names |
 | `bb version` | Print the version (also `--version`, `-v`) |
-| `bb help` | Print usage (also `-h`, `--help`) |
+| `bb help` | Print usage (also `-h`, `--help`, or `bb <command> -h`) |
 
 Every file command also accepts `--backend s3|b2` to override the stored backend for that one invocation. Exit codes: `0` success, `1` error (message on stderr).
 

@@ -130,8 +130,8 @@ func TestUsageAccuracy(t *testing.T) {
 		t.Errorf("stop takes no flags but its help mentions --delete:\n%s", stop)
 	}
 	for _, s := range []string{
-		`"bb X.Y.Z" (also --version, -v)`, // version output + aliases
-		"  help ", "-h, --help", // help command + aliases
+		`"bb X.Y.Z" (also --version, -v)`,          // version output + aliases
+		"  help ", "-h, --help", "or <command> -h", // help command + aliases
 		"--backend s3|b2            override the stored backend for one ls / get / put / rm / find",
 		"used by upload, start, serve and all file operations",
 		"Override it for one ls / get / put / rm / find with  --backend s3|b2",
@@ -196,7 +196,7 @@ func TestParseServiceArgs(t *testing.T) {
 // ~/backup_repo (master key + empty DB) as a side effect: they now answer
 // before config.Load.
 func TestVersionAndHelpCreateNoState(t *testing.T) {
-	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}, {"help"}, {"--help"}, {"-h"}} {
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}, {"help"}, {"--help"}, {"-h"}, {"--h"}, {"-help"}, {"-h=1"}} {
 		home := t.TempDir()
 		t.Setenv("HOME", home)
 		t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
@@ -225,10 +225,63 @@ func TestUnknownCommandCreatesNoState(t *testing.T) {
 	}
 }
 
-// TestIsCommandMatchesDispatch parses run's dispatch switch and checks every
-// case is accepted by isCommand, so adding a command without updating the
-// allowlist fails here instead of silently rejecting the new command.
-func TestIsCommandMatchesDispatch(t *testing.T) {
+// TestHelpRequested covers the help-flag scan run does before touching state.
+func TestHelpRequested(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"-h"}, true},
+		{[]string{"--h"}, true},
+		{[]string{"-help"}, true},
+		{[]string{"--help"}, true},
+		{[]string{"photos/", "-r", "-h"}, true}, // after positionals, like parseFlags
+		{[]string{"install", "--help"}, true},   // bb service install --help
+		{[]string{"--", "-h"}, false},           // the first argument after "--" is literal
+		{[]string{"-r", "--", "--help"}, false},
+		{[]string{"-h=1"}, true}, // the flag package treats -h=x as help too
+		{[]string{"x", "--help=true"}, true},
+		{[]string{"-hh"}, false},
+		{[]string{"-hh=1"}, false},
+		{[]string{"help"}, false}, // bare word: a folder or query named "help"
+		{[]string{"photos/", "-r"}, false},
+		{nil, false},
+	} {
+		if got := helpRequested(tc.args); got != tc.want {
+			t.Errorf("helpRequested(%q) = %v, want %v", tc.args, got, tc.want)
+		}
+	}
+}
+
+// TestSubcommandHelpCreatesNoState is the regression for `bb <cmd> -h`: flag
+// commands exited 1 after creating ~/backup_repo, no-flag commands (init, stop,
+// list) ignored -h and ran, and positional commands took "-h" as a folder,
+// bucket or key name. Every dispatched command must now print help, exit 0 and
+// leave no state behind. Exit 0 alone proves little (list/status already
+// exit 0), so the no-state check is what catches a command that ran.
+func TestSubcommandHelpCreatesNoState(t *testing.T) {
+	var cases [][]string
+	for _, c := range dispatchCommands(t) {
+		cases = append(cases, []string{c, "-h"}, []string{c, "--help"}, []string{c, "x", "-help"}, []string{c, "--h=1"})
+	}
+	cases = append(cases, []string{"service", "install", "-h"}, []string{"service", "install", "--folder", "/tmp", "--h"})
+	for _, args := range cases {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		if code := run(args); code != 0 {
+			t.Errorf("run(%q) = %d, want 0", args, code)
+		}
+		if _, err := os.Stat(filepath.Join(home, "backup_repo")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("run(%q) created ~/backup_repo (stat err %v)", args, err)
+		}
+	}
+}
+
+// dispatchCommands parses main.go and returns the string cases of run's
+// `switch cmd` — the commands bb dispatches after opening the store.
+func dispatchCommands(t *testing.T) []string {
+	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -261,7 +314,14 @@ func TestIsCommandMatchesDispatch(t *testing.T) {
 	if len(cases) < 15 {
 		t.Fatalf("found only %d dispatch cases %q; did run's `switch cmd` change shape?", len(cases), cases)
 	}
-	for _, c := range cases {
+	return cases
+}
+
+// TestIsCommandMatchesDispatch parses run's dispatch switch and checks every
+// case is accepted by isCommand, so adding a command without updating the
+// allowlist fails here instead of silently rejecting the new command.
+func TestIsCommandMatchesDispatch(t *testing.T) {
+	for _, c := range dispatchCommands(t) {
 		if !isCommand(c) {
 			t.Errorf("run dispatches %q but isCommand rejects it", c)
 		}

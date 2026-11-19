@@ -14,6 +14,12 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 
 ## Entries
 
+### 2026-11-19 - `bb <command> -h` ran the command, created state, or used "-h" as a name
+- **Issue**: Flag commands (`upload/start/ls/find/get/put/rm/service install`) printed the flag package's usage and exited 1 after creating `~/backup_repo`. No-flag commands ignored `-h` and ran: `bb init -h` started setup, and `bb stop -h` stopped the daemon. Positional commands treated "-h" as a value: `bb watch -h` took it as the path `<cwd>/-h` (watched if that directory existed, otherwise "folder not found" after creating state), and `bb bucket -h` would switch to a bucket named "-h". Found in the 2026-11-18 docs audit.
+- **Root Cause**: `run` answered help only as the first argument (`bb -h`). Each subcommand's arguments reached `config.Load`/`store.Open` and the command itself unchecked.
+- **Solution**: `helpRequested` scans the subcommand's arguments for the flag package's help spellings (`isHelpArg`: `-h`, `--h`, `-help`, `--help`, also with `=value`) and stops at `--`. Top-level `bb --h` / `bb -help` now count too. `run` checks it after the `isCommand` gate and before `config.Load`: it prints usage to stdout and exits 0.
+- **Prevention**: `TestSubcommandHelpCreatesNoState` runs every command in the dispatch switch (parsed from main.go) with `-h`, `--help` and a trailing `-help`, plus `service install -h`. It asserts exit 0 and no `~/backup_repo`, so a newly added command is covered automatically. It fails with the check disabled.
+
 ### 2026-11-18 - `make bump` breaks after the version reaches major 21
 - **Issue**: A patch bump at `20.20.20`, a minor bump at `20.20.x`, or a major bump at `20.x.x` wrote `21.0.0` to VERSION; the next `make bump*` then failed with `version "21.0.0": component "21" must be an integer 0..20`. Latent (current version 1.0.9); found in the 2026-11-18 docs audit.
 - **Root Cause**: `version.Parse` applied the `0..Max` bound to all three components, while `Bump` (and the package doc) treat major as unbounded.

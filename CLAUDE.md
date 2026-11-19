@@ -120,7 +120,7 @@ This repository is feature-complete against the spec above (see Implementation s
 
 The spec above is the original aspirational design. **The project has been feature-complete against this spec since 2026-06-16; current release: v1.0.10 (2026-11-18)** — everything below is implemented and merged to `master` (Go packages under `internal/{apperr,crypto,config,store,b2,backup,daemon,web,cli,service,version}` + `main.go`):
 
-- **Core CLI** — `init`, `watch`, `unwatch`, `list`, `status`, `upload`, `config`, `version`. Watched folders are stored as absolute paths (`~` expanded; case-insensitive matching on Windows); unknown commands, `version` and `help` never create `~/backup_repo` (ADR-021/023/024).
+- **Core CLI** — `init`, `watch`, `unwatch`, `list`, `status`, `upload`, `config`, `version`. Watched folders are stored as absolute paths (`~` expanded; case-insensitive matching on Windows); unknown commands, `version` and `help` never create `~/backup_repo` (ADR-021/023/024), nor does `bb <command> -h` (bugs.md 2026-11-19).
 - **Dual backend** — `S3Backend` (aws-sdk) and a **native `B2Backend`** (B2 **v3** API over stdlib `net/http`) behind a unified `b2.Backend` interface. Switch with `bb backend [s3|b2]` (default `s3`) or, for one `ls`/`get`/`put`/`rm`/`find`, `--backend s3|b2`.
 - **Manual bucket commands** — `ls`, `get`, `put`, `rm`, `find`, `backend`.
 - **Setup** — `init` reads the applicationKey without echo, picks the `b2` backend when no S3 endpoint/region is given, and fails clearly without an interactive terminal (ADR-021/022). `buckets` lists buckets; the bucket ID is auto-resolved from the name (ADR-017).
