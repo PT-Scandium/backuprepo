@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -268,29 +269,97 @@ func (s *Server) deletePath(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
+	files, err := s.store.ListFiles(ctx)
+	if err != nil {
+		return err
+	}
+	// Match records the way the OS matches paths: resolveWatched (filepath.Rel)
+	// accepts a differently-cased path on Windows, so an exact comparison here
+	// would delete the local files but leave their backups and records behind.
+	recs := recordsToDelete(files, path, info.IsDir(), runtime.GOOS == "windows", string(filepath.Separator))
 	if info.IsDir() {
-		files, err := s.store.ListFiles(ctx)
-		if err != nil {
-			return err
-		}
-		prefix := path + string(filepath.Separator)
-		for _, fr := range files {
-			if fr.Path == path || strings.HasPrefix(fr.Path, prefix) {
-				if derr := s.be.Delete(ctx, fr.RemoteKey); derr != nil && !errors.Is(derr, apperr.ErrObjectNotFound) {
-					return derr
-				}
-				_ = s.store.RemoveFile(ctx, fr.Path)
+		for _, fr := range recs {
+			if derr := s.be.Delete(ctx, fr.RemoteKey); derr != nil && !errors.Is(derr, apperr.ErrObjectNotFound) {
+				return derr
 			}
+			_ = s.store.RemoveFile(ctx, fr.Path)
 		}
 		return os.RemoveAll(path)
 	}
 	// Delete the remote object first so a failure leaves the local file intact.
-	key := backup.RemoteKey(path)
+	// Use the stored record's key and path when there is one: they carry the
+	// casing the file was backed up under.
+	key, recPath := backup.RemoteKey(path), path
+	if len(recs) > 0 {
+		key, recPath = recs[0].RemoteKey, recs[0].Path
+	}
 	if err := s.be.Delete(ctx, key); err != nil && !errors.Is(err, apperr.ErrObjectNotFound) {
 		return err
 	}
-	_ = s.store.RemoveFile(ctx, path)
+	_ = s.store.RemoveFile(ctx, recPath)
 	return os.Remove(path)
+}
+
+// recordsToDelete returns the records whose backups a delete of path should
+// purge: the record equal to path, or for a directory every record at or
+// beneath it. With fold (Windows) names compare case-insensitively, as the OS
+// does, but a record that matches only by folding must also name the same
+// directory or file on disk (os.SameFile): a per-directory case-sensitive
+// folder can hold both Docs and docs, and deleting Docs must not purge the
+// backups of docs. A record whose path can't be checked is left alone (its
+// backup is kept rather than deleted).
+func recordsToDelete(files []store.FileRecord, path string, isDir, fold bool, sep string) []store.FileRecord {
+	root := strings.TrimSuffix(path, sep)
+	var rootInfo os.FileInfo
+	var out []store.FileRecord
+	for _, fr := range trackedRecords(files, path, isDir, fold, sep) {
+		head := fr.Path // the part of fr.Path that names path itself
+		if len(fr.Path) > len(root) {
+			head = fr.Path[:len(root)]
+		}
+		if head == root {
+			out = append(out, fr)
+			continue
+		}
+		if rootInfo == nil {
+			var err error
+			if rootInfo, err = os.Stat(root); err != nil {
+				return out
+			}
+		}
+		if hi, err := os.Stat(head); err == nil && os.SameFile(hi, rootInfo) {
+			out = append(out, fr)
+		}
+	}
+	return out
+}
+
+// trackedRecords returns the records for path by name alone: the one equal to
+// it, or for a directory every record at or beneath it, comparing
+// case-insensitively when fold is set. sep is the path separator.
+func trackedRecords(files []store.FileRecord, path string, isDir, fold bool, sep string) []store.FileRecord {
+	var out []store.FileRecord
+	for _, fr := range files {
+		if pathEqual(fr.Path, path, fold) || isDir && pathUnder(fr.Path, path, fold, sep) {
+			out = append(out, fr)
+		}
+	}
+	return out
+}
+
+// pathEqual compares two cleaned paths, case-insensitively when fold is set
+// (Windows: NTFS default).
+func pathEqual(a, b string, fold bool) bool {
+	if fold {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// pathUnder reports whether p lies strictly beneath dir.
+func pathUnder(p, dir string, fold bool, sep string) bool {
+	prefix := strings.TrimSuffix(dir, sep) + sep
+	return len(p) > len(prefix) && pathEqual(p[:len(prefix)], prefix, fold)
 }
 
 // handleClose renders the closed page and signals Serve to shut the server down.

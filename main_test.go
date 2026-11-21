@@ -33,6 +33,8 @@ func TestParseFlagsAnyOrder(t *testing.T) {
 		{"two positionals + trailing flag", []string{"a", "b", "-r"}, true, false, "", []string{"a", "b"}},
 		{"no flags", []string{"only/"}, false, false, "", []string{"only/"}},
 		{"no args", nil, false, false, "", nil},
+		{"-- then flag-like args", []string{"--", "-x", "-r"}, false, false, "", []string{"-x", "-r"}},
+		{"flags, positional, --", []string{"-r", "q", "--", "-f", "x"}, true, false, "", []string{"q", "-f", "x"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -164,6 +166,7 @@ func TestParseServiceArgs(t *testing.T) {
 		{[]string{"install", "--folder", "~/Work", "--delete", "--force"},
 			serviceOpts{sub: "install", folder: "~/Work", deleteRemoved: true, force: true}},
 		{[]string{"install", "--folder=/data"}, serviceOpts{sub: "install", folder: "/data"}},
+		{[]string{"install", "--linger"}, serviceOpts{sub: "install", linger: true}},
 		{[]string{"uninstall"}, serviceOpts{sub: "uninstall"}},
 		{[]string{"status"}, serviceOpts{sub: "status"}},
 	}
@@ -237,8 +240,9 @@ func TestHelpRequested(t *testing.T) {
 		{[]string{"--help"}, true},
 		{[]string{"photos/", "-r", "-h"}, true}, // after positionals, like parseFlags
 		{[]string{"install", "--help"}, true},   // bb service install --help
-		{[]string{"--", "-h"}, false},           // the first argument after "--" is literal
+		{[]string{"--", "-h"}, false},           // after "--" every argument is literal
 		{[]string{"-r", "--", "--help"}, false},
+		{[]string{"--", "foo", "-h"}, false},
 		{[]string{"-h=1"}, true}, // the flag package treats -h=x as help too
 		{[]string{"x", "--help=true"}, true},
 		{[]string{"-hh"}, false},
@@ -317,6 +321,29 @@ func dispatchCommands(t *testing.T) []string {
 	return cases
 }
 
+// TestUsageErrorsCreateNoState is the regression for argument and flag errors
+// creating ~/backup_repo before failing: run used to load config and open the
+// store before checking the command line.
+func TestUsageErrorsCreateNoState(t *testing.T) {
+	for _, args := range [][]string{
+		{"watch"}, {"watch", "a", "b"}, {"unwatch"}, {"find"}, {"get"}, {"put"}, {"rm"},
+		{"bucket", "a", "b", "c"}, {"appkey", "a", "b"}, {"backend", "s3", "b2"},
+		{"ls", "--nope"}, {"upload", "--nope"}, {"start", "--nope"}, {"rm", "-q", "x"},
+		{"service"}, {"service", "bogus"}, {"service", "install", "--nope"}, {"service", "status", "x"},
+		{"ls", "--backend", "bogus"}, {"find", "--backend", "x", "q"}, {"rm", "p", "--backend=s4"}, {"backend", "bogus"},
+	} {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		t.Setenv("USERPROFILE", home)
+		if code := run(args); code != 1 {
+			t.Errorf("run(%q) = %d, want 1", args, code)
+		}
+		if _, err := os.Stat(filepath.Join(home, "backup_repo")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("run(%q) created ~/backup_repo (stat err %v)", args, err)
+		}
+	}
+}
+
 // TestIsCommandMatchesDispatch parses run's dispatch switch and checks every
 // case is accepted by isCommand, so adding a command without updating the
 // allowlist fails here instead of silently rejecting the new command.
@@ -374,5 +401,30 @@ func TestBucketIDLookupWiring(t *testing.T) {
 		if !found[name] {
 			t.Errorf("no cli.%s call with a b2 bucket lookup found in main.go", name)
 		}
+	}
+	// cli.Buckets takes (listAll, findOne): both have the same type, so only
+	// this check notices them swapped (the scoped-key fallback would then
+	// list via FindBucket and "fall back" to the full list).
+	var bucketsArgs []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if fn, ok := call.Fun.(*ast.SelectorExpr); ok && fn.Sel.Name == "Buckets" {
+			if pkg, ok := fn.X.(*ast.Ident); ok && pkg.Name == "cli" {
+				for _, arg := range call.Args {
+					if sel, ok := arg.(*ast.SelectorExpr); ok {
+						if p, ok := sel.X.(*ast.Ident); ok && p.Name == "b2" {
+							bucketsArgs = append(bucketsArgs, sel.Sel.Name)
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+	if strings.Join(bucketsArgs, ",") != "ListBuckets,FindBucket" {
+		t.Errorf("cli.Buckets is passed b2.%v; want ListBuckets then FindBucket", bucketsArgs)
 	}
 }

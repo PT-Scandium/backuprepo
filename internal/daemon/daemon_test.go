@@ -17,6 +17,8 @@ import (
 	"github.com/fsnotify/fsnotify"
 
 	"backuprepo/internal/apperr"
+	"backuprepo/internal/b2"
+	"backuprepo/internal/backup"
 )
 
 // TestDebounceCoalescesBurst verifies a rapid burst of events triggers exactly
@@ -355,5 +357,45 @@ func TestStopNoOrCorruptPIDFile(t *testing.T) {
 	_ = os.WriteFile(pidPath(dir), []byte("garbage"), 0o600)
 	if err := Stop(dir, &bytes.Buffer{}); !errors.Is(err, apperr.ErrDaemon) || !strings.Contains(err.Error(), "corrupt") {
 		t.Errorf("corrupt file: %v", err)
+	}
+}
+
+// TestTriggersFlush covers which fsnotify ops schedule a flush: content ops
+// always, Remove only with deletion propagation on (the regression: with
+// --delete a deletion waited for the 5-minute scan), Chmod never.
+func TestTriggersFlush(t *testing.T) {
+	for _, tc := range []struct {
+		op        fsnotify.Op
+		deletions bool
+		want      bool
+	}{
+		{fsnotify.Create, false, true},
+		{fsnotify.Write, false, true},
+		{fsnotify.Rename, false, true},
+		{fsnotify.Chmod, false, false},
+		{fsnotify.Chmod, true, false},
+		{fsnotify.Remove, false, false},
+		{fsnotify.Remove, true, true},
+		{fsnotify.Remove | fsnotify.Chmod, true, true},
+	} {
+		if got := triggersFlush(tc.op, tc.deletions); got != tc.want {
+			t.Errorf("triggersFlush(%v, deletions=%v) = %v, want %v", tc.op, tc.deletions, got, tc.want)
+		}
+	}
+}
+
+// TestEnableDeletionsTurnsOnRemoveTrigger checks EnableDeletions flips the
+// flag Run's event loop passes to triggersFlush.
+func TestEnableDeletionsTurnsOnRemoveTrigger(t *testing.T) {
+	d := &Daemon{svc: backup.New(nil, b2.NewFake())}
+	if d.deletions {
+		t.Fatal("deletions on before EnableDeletions")
+	}
+	if d.flushOn(fsnotify.Remove) {
+		t.Error("Remove triggers a flush without deletion propagation")
+	}
+	d.EnableDeletions(b2.NewFake())
+	if !d.deletions || !d.flushOn(fsnotify.Remove) {
+		t.Error("EnableDeletions did not turn on the Remove trigger")
 	}
 }

@@ -26,7 +26,7 @@ export CGO_ENABLED := 0
 # Override, e.g.:  make install PREFIX=/usr/local/bin   (may need sudo)
 PREFIX ?= $(HOME)/.local/bin
 
-.PHONY: all build install uninstall clean test vet fmt tidy help version bump bump-minor bump-major
+.PHONY: all build install uninstall clean test coverage vet lint fmt tidy help version bump bump-minor bump-major
 
 all: build
 
@@ -72,9 +72,21 @@ clean:
 test:
 	$(GO) test ./...
 
+## coverage: run the tests with coverage; per-function report in coverage.out
+coverage:
+	$(GO) test -count=1 -coverprofile=coverage.out ./...
+	$(GO) tool cover -func=coverage.out | tail -1
+
 ## vet: run go vet across all packages
 vet:
 	$(GO) vet ./...
+
+## lint: go vet (linux, windows, darwin) + fail if any file needs gofmt
+lint:
+	GOOS=linux $(GO) vet ./...
+	GOOS=windows $(GO) vet ./...
+	GOOS=darwin $(GO) vet ./...
+	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 ## fmt: gofmt all Go sources
 fmt:

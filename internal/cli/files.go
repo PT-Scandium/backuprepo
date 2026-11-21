@@ -5,6 +5,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -282,10 +283,23 @@ func confirm(in io.Reader, out io.Writer, prompt string) bool {
 // Buckets lists every bucket visible to the stored credentials, marking the one
 // currently selected in config with "*". It always queries the native B2 API
 // (via b2.ListBuckets) since only that API returns bucket IDs.
-func Buckets(ctx context.Context, cfg b2.Config, out io.Writer) error {
-	list, err := b2.ListBuckets(ctx, cfg)
+//
+// listAll is b2.ListBuckets and findOne is b2.FindBucket (injected for tests).
+// A key restricted to one bucket is refused an unfiltered listing, so on an
+// access-denied error Buckets falls back to looking up the configured bucket
+// by name and says why only that one is shown.
+func Buckets(ctx context.Context, cfg b2.Config, listAll, findOne BucketLister, out io.Writer) error {
+	list, err := listAll(ctx, cfg)
 	if err != nil {
-		return err
+		if !errors.Is(err, apperr.ErrAccessDenied) || cfg.BucketName == "" {
+			return err
+		}
+		one, ferr := findOne(ctx, cfg)
+		if ferr != nil {
+			return err // report the original denial; the fallback added nothing
+		}
+		fmt.Fprintln(out, "This key cannot list every bucket (it is restricted to one); showing the configured bucket only.")
+		list = one
 	}
 	if len(list) == 0 {
 		fmt.Fprintln(out, "(no buckets)")
@@ -295,7 +309,7 @@ func Buckets(ctx context.Context, cfg b2.Config, out io.Writer) error {
 	fmt.Fprintln(tw, "\tNAME\tID\tTYPE")
 	for _, bk := range list {
 		marker := " "
-		if bk.Name == cfg.BucketName {
+		if strings.EqualFold(bk.Name, cfg.BucketName) { // B2 names are not case sensitive
 			marker = "*"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", marker, bk.Name, bk.ID, bk.Type)

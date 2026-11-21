@@ -104,6 +104,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 **Consequences:**
 - ✅ Robust, well-maintained S3 client and no-CGO SQLite.
 - ❌ Binary exceeds the size goal — flagged for possible future trimming (e.g. a leaner S3 client).
+- **Update 2026-11-21:** size accepted at ~22 MB with measured breakdown; see ADR-025.
 
 ### ADR-008: Native B2 backend implemented over stdlib net/http, not a B2 SDK (2026-06-06)
 
@@ -219,6 +220,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ❌ Reconciliation is O(tracked files) `Lstat` calls per run — fine at current scale, optimizable later.
 - ❌ On a versioned bucket, a propagated delete purges ALL versions (existing backend `Delete` semantics) — irreversible remotely.
 - ❌ `unwatch` leaves records that are no longer under a watched folder, so they are never deletion candidates — those remote objects persist (intended: unwatch ≠ delete).
+- **Update 2026-11-21:** with `--delete`, daemon Remove events now *schedule a flush*; the scan still decides deletions (ADR-025).
 
 ### ADR-014: Cross-platform daemon lifecycle via build-tagged signal files; forceful stop on Windows (2026-06-16)
 
@@ -308,6 +310,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ `Backend` interface unchanged; `var _ Backend = (*B2Backend)(nil)` still holds. New tests: `TestB2ListBuckets`, `TestInitBucketIDFallback`, `TestBucketAutoResolvesID`; full suite + vet + gofmt green.
 - ⚠️ `bb buckets` needs a key with account-wide **`listBuckets`** capability. (As first written, this line also claimed a **bucket-scoped** key "sees only its own bucket (still enough to resolve *that* bucket's ID during init)" — that was wrong:) **Update 2026-11-18:** per Backblaze's `b2_list_buckets` docs, a bucket-restricted token must include that bucket's `bucketId` or `bucketName` "or the request will be denied" — `ListBuckets` sends only `accountId`, so with a scoped key auto-resolve most likely failed and init fell back to the manual prompt. **Fixed 2026-11-18:** `init`/`bucket` now use `b2.FindBucket`, which sends `bucketName` in `b2_list_buckets` (works for scoped and account-wide keys); `bb buckets` still lists everything via `b2.ListBuckets` and still needs an account-wide key. See bugs.md 2026-11-18.
 - ⚠️ `bb bucket <name>` (no id) changed meaning: it now **auto-resolves** the ID rather than clearing it. It still clears on a failed/not-found lookup, so the old S3-only "clear the ID" path remains reachable when the name isn't in the account.
+- **Update 2026-11-21:** lookups fold case and store B2's spelling; `bb buckets` falls back to the configured bucket on an access denial (ADR-025).
 
 ### ADR-018: Retry B2 native uploads with a fresh upload URL on transient failures (2026-07-06)
 
@@ -377,6 +380,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ⚠️ Follow-up (pre-existing, sharpened by unattended starts): PID liveness is a signal-0 probe only, so a reused PID can block startup and make `bb stop` signal an unrelated process. Fix: on Linux also check `/proc/<pid>/exe` is bb. The install error now names the PID file instead of prescribing `bb stop`. Also: `bb watch` still stores relative paths verbatim — consider storing `filepath.Abs`. _(Resolved by ADR-023: PID start-time identity on Linux — not `/proc/<pid>/exe` — and absolute watch paths.)_
 - ⚠️ Folders added later with `bb watch` need `systemctl --user restart backuprepo` (daemon reads folders once). Without lingering the service stops at logout.
 - ⚠️ Not exercised against a live user manager in CI/tests (would back up real files); verified only via fake runner + `systemd-analyze verify` + sandboxed-HOME CLI runs.
+- **Update 2026-11-21:** opt-in `bb service install --linger` runs `loginctl enable-linger <uid>` (warns on failure); the hint shows only while lingering is off (ADR-025).
 
 ### ADR-021: `init` picks a working backend; state-free `version`/`help`; `rm` names the bucket (2026-11-15)
 
@@ -443,6 +447,7 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ✅ `bb watch docs/` / `~/Documents` store absolute paths; `bb unwatch` accepts any spelling. Tests in `cli_test.go`; sandboxed CLI run confirmed.
 - ⚠️ **macOS and Windows keep the old PID behaviour** _(Windows superseded by ADR-024)_ (no start time recorded → signal-0 / `FindProcess` liveness). Windows `stop` falls back to `proc.Kill` if the named event can't be opened, so PID reuse there could still hit another process — process creation time via `GetProcessTimes` would fix it (follow-up).
 - ⚠️ Not exercised with a live `bb start` (would contact Backblaze); `writePID`/`Stop` are unit-tested.
+- **Update 2026-11-21:** usage/flag errors no longer create state either: `run` validates before `config.Load` (ADR-025).
 
 ### ADR-024: Windows PID identity via creation time; case-insensitive (path-only) folder matching (2026-11-15)
 
@@ -467,3 +472,36 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ⚠️ **Windows code was not executed** — no Windows machine/Wine/CI here. Verified only by `GOOS=windows go vet`, compiling the Windows test binaries (`go test -c`) and review against Win32 docs. On a Windows `go test`, the Windows-only tests (`proc_windows_test.go`: creation time, exited-but-referenced process not alive; `cli_windows_test.go`: case-insensitive watch/unwatch incl. after the folder is removed) run, and the shared start-time tests (`TestWritePIDRecordsStartTime`, `TestReusedPIDIsNotTheDaemon`, `TestStopNeverSignalsReusedPID` — which would kill the test binary on regression — and `TestStopSignalsMatchingProcess` if `sleep` is on PATH) stop skipping.
 - ⚠️ `STILL_ACTIVE` (259) is ambiguous for a process that genuinely exits with code 259 — benign here (PID not reused while a handle is open, and start-time check still applies).
 - Follow-ups: web UI delete uses an exact-case prefix check (`web.deletePath`) though `resolveWatched` is case-insensitive on Windows — a mixed-case path could delete locally but leave remote objects/records (old code, only via a crafted POST past the CSRF guard); `EqualFold` ≠ NTFS upcase table and Windows per-directory case-sensitivity isn't honoured; a Windows CI job would close the execution gap.
+- **Update 2026-11-21:** the web-delete case follow-up is fixed, and Windows code now runs in CI (ADR-025).
+
+### ADR-025: Validate before state; scoped-key and case-folding follow-ups; open items closed by decision (2026-11-21)
+
+**Context:**
+- The 2026-11-18 audit and the v1.0.8 wrap-up left open items. Some needed code (below); the rest were "decide, then record".
+- Backblaze's Buckets page: "Bucket names are not case sensitive, even though they can include upper-case letters." The API pages don't say whether the `b2_list_buckets` `bucketName` filter folds case.
+
+**Decision:**
+- **State only for a valid command line.** `run` checks arguments, flags and `--backend`/`bb backend` values first, and only then loads config and opens the store. Usage and flag errors exit 1 without creating `~/backup_repo` (extends ADR-021/023). Errors found only while the command runs (e.g. `bb watch /missing`) still come after state exists. Everything after `--` is positional.
+- **Bucket names fold case.** `resolveBucketID` matches B2's bucket list case-insensitively and stores B2's spelling, which the S3 API needs. If B2's `bucketName` filter is exact, a wrongly-cased name simply isn't found, which is the previous behaviour.
+- **`bb buckets` with a scoped key.** A typed B2 status error matches the new `apperr.ErrAccessDenied` on 401/403. Only on that error does `bb buckets` fall back to `FindBucket` for the configured bucket, and it says why (ADR-017 update).
+- **`bb status`** adds the daemon state (from the PID file) and, on Linux, the service state. Both are best-effort, and the service probe has a 2 s timeout because bare `bb` runs status.
+- **`bb service install --linger`** runs `loginctl enable-linger <uid>`, but only after a successful install, so a failed install leaves login policy alone. It is opt-in, and a failure only prints a warning. Without the flag, the login hint shows only while lingering is off (ADR-020 update: lingering is still never changed without being asked). `bb status`'s service line accepts only systemd state words; anything else, such as a "Failed to connect to user scope bus" message, reads "unknown".
+- **Daemon Remove events** schedule a flush when `--delete` is on. The reconciliation scan still decides what is deleted, so ADR-013's single source of truth stands. The event only makes the scan happen sooner. Trade-off: the grace period before an irreversible all-versions purge shrinks from "next event or 5 min" to the 1 s quiet window. A tool that unlinks a file and recreates it more than about 1 s later gets the old versions purged, then re-uploads the file as new. This is acceptable because `--delete` is opt-in and already documented as destructive.
+- **S3 `DeleteObjects`** goes in batches of 1000 keys, and any per-key `Errors` entry is an `ErrDeleteFailed`. It stops at the first failed batch, so with more than 1000 versions a failure after the first batch can leave the key resolving to an older version. That failure is reported, and a retry finishes the job.
+- **The web delete** matches records the way the OS compares paths (case-insensitively on Windows) and uses each record's stored `RemoteKey` (ADR-024 follow-up). A record that matches only by folding must also name the same directory or file on disk (`os.SameFile`). In a per-directory case-sensitive folder, deleting `Docs` therefore never purges the backups of a sibling `docs`, and an unconfirmable match keeps its backup. Unlike ADR-024's rejected use, `SameFile` only *confirms* a name match here, so a failed check errs toward keeping data. The remaining edge is a ReFS file-ID collision reporting two folders as one.
+- **Closed by decision, no code:**
+  - **Binary size:** accepted at about 22 MB (ADR-007 update). Measured symbol sizes are about 4.5 MB for aws-sdk-go-v2 and about 2.0 MB for modernc SQLite; the rest is mostly the stdlib (net/http, TLS, crypto). Getting under 10 MB would mean dropping the S3 backend or the pure-Go SQLite (ADR-001/002), which isn't worth it.
+  - **Windows per-directory case sensitivity** (`fsutil … setCaseSensitiveInfo`, WSL folders) and the NTFS upcase table are not honoured. Folder matching folds case on all Windows paths, and `EqualFold` is close to NTFS's own folding for real-world names. Accepted limitation.
+  - **Bare `bb` prints `status`** and setup is always `bb init`. This is intended: a double-click or a typo must never start interactive setup or a daemon. It records the divergence CLAUDE.md flagged as having no ADR. `bb status` now reports daemon state, which closes the other half of that gap.
+  - **`b2.Uploader.Exists`** stays: `put --skip-existing` uses it, and `backup.Service` doesn't need it because it uses its own size+mtime+hash state. The `copyInto` wrapper was inlined.
+
+**Alternatives Considered:**
+- Delete directly from fsnotify Remove events → Rejected again for the reasons in ADR-013.
+- Fall back in `bb buckets` on any error → Rejected: it would hide network and credential errors behind a partial listing.
+- Run `loginctl enable-linger` on every install → Rejected: it changes login policy (ADR-020).
+
+**Consequences:**
+- ✅ Usage, flag and backend-name mistakes leave no state behind. Bucket names typed in any case resolve. Scoped keys get a useful `bb buckets`.
+- ✅ The Windows-only code paths are now run by CI (`windows-latest`). The first run found Linux-only fixtures in the `service` tests; they now skip off Linux.
+- ⚠️ Still not covered: whether B2's `bucketName` filter folds case, and a real scoped-key run (the user's key is account-wide).
+- ⚠️ `bb backend` now rejects more than one argument. It used to ignore the extras.

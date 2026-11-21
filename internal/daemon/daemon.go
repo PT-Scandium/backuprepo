@@ -45,6 +45,7 @@ type Daemon struct {
 	interval    time.Duration // full-scan fallback period
 	quietWindow time.Duration // flush after events stay quiet this long
 	maxDelay    time.Duration // upper bound on coalescing from the first event of a burst
+	deletions   bool          // deletion propagation on: Remove events trigger a flush too
 }
 
 // New builds a Daemon from a store and an uploader, with the default debounce
@@ -63,6 +64,7 @@ func New(st *store.Store, up b2.Uploader) *Daemon {
 // objects whose local files have been deleted (opt-in; destructive).
 func (d *Daemon) EnableDeletions(del b2.Deleter) {
 	d.svc = d.svc.WithDeleter(del)
+	d.deletions = true
 }
 
 // Run watches every configured folder and blocks until the context is cancelled
@@ -145,12 +147,7 @@ func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
 					_ = addRecursive(w, ev.Name)
 				}
 			}
-			// React to content-affecting ops. Chmod is metadata-only. Remove does
-			// not trigger a flush: deletion propagation is opt-in (--delete) and
-			// runs inside every flush, so a removal is picked up by the next
-			// event-driven flush or the fallback scan. Rename matters because
-			// many editors save atomically (write temp, rename over the target).
-			if ev.Op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename) != 0 {
+			if d.flushOn(ev.Op) {
 				select {
 				case events <- ev.Name:
 				default:
@@ -169,6 +166,24 @@ func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
 			d.flush(ctx, out)
 		}
 	}
+}
+
+// flushOn reports whether this daemon should schedule a flush for op (see
+// triggersFlush), with Remove counting once EnableDeletions has run.
+func (d *Daemon) flushOn(op fsnotify.Op) bool { return triggersFlush(op, d.deletions) }
+
+// triggersFlush reports whether an fsnotify op should schedule a flush. Create,
+// Write and Rename change content (Rename matters because many editors save
+// atomically: write a temp file, rename it over the target). Chmod is
+// metadata-only. Remove counts only with deletion propagation on (--delete):
+// the flush's reconciliation scan then removes the remote copy promptly
+// instead of at the next fallback scan. The scan, not the event, decides
+// what is deleted (ADR-013).
+func triggersFlush(op fsnotify.Op, deletions bool) bool {
+	if op&(fsnotify.Create|fsnotify.Write|fsnotify.Rename) != 0 {
+		return true
+	}
+	return deletions && op&fsnotify.Remove != 0
 }
 
 // debounce coalesces a stream of changed paths into as few flush() calls as

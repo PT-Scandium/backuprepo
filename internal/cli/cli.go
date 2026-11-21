@@ -23,6 +23,7 @@ import (
 	"backuprepo/internal/apperr"
 	"backuprepo/internal/b2"
 	"backuprepo/internal/backup"
+	"backuprepo/internal/daemon"
 	"backuprepo/internal/store"
 )
 
@@ -72,7 +73,9 @@ func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer, lis
 	}
 	// Try to resolve the bucket ID automatically so the user needn't hunt for it;
 	// fall back to a manual prompt if the lookup fails or the bucket isn't found.
-	cfg.BucketID = resolveBucketID(ctx, lister, cfg.KeyID, cfg.AppKey, cfg.Bucket, out)
+	if id, name := resolveBucketID(ctx, lister, cfg.KeyID, cfg.AppKey, cfg.Bucket, "enter it manually", out); id != "" {
+		cfg.BucketID, cfg.Bucket = id, name
+	}
 	if cfg.BucketID == "" {
 		cfg.BucketID = ask("Bucket ID (for native B2 API)")
 	}
@@ -133,28 +136,34 @@ func Init(ctx context.Context, st *store.Store, in io.Reader, out io.Writer, lis
 }
 
 // resolveBucketID looks the bucket up by name via the native B2 API and returns
-// its ID so Init can skip the manual "Bucket ID" prompt. It returns "" (and
-// explains why on out) when auto-resolution is unavailable, the lookup fails, or
-// the named bucket isn't visible to the credentials — the caller then asks.
-func resolveBucketID(ctx context.Context, lister BucketLister, keyID, appKey, bucket string, out io.Writer) string {
+// its ID and B2's spelling of its name, so Init can skip the manual "Bucket ID"
+// prompt. B2 bucket names are not case sensitive, so the match folds case and
+// the returned name is the one B2 reports (the S3 API wants the real
+// spelling). It returns "" for both (and explains why on out, followed by
+// followUp) when auto-resolution is unavailable, the lookup fails, or the
+// bucket isn't visible to the credentials.
+func resolveBucketID(ctx context.Context, lister BucketLister, keyID, appKey, bucket, followUp string, out io.Writer) (id, name string) {
 	if lister == nil {
-		return ""
+		return "", ""
 	}
 	// BucketName lets the lookup name the bucket in the request, which B2
 	// requires for keys restricted to a single bucket (see b2.FindBucket).
 	list, err := lister(ctx, b2.Config{KeyID: keyID, AppKey: appKey, BucketName: bucket})
 	if err != nil {
-		fmt.Fprintf(out, "Could not auto-resolve bucket ID (%v); enter it manually.\n", err)
-		return ""
+		fmt.Fprintf(out, "Could not auto-resolve bucket ID (%v); %s.\n", err, followUp)
+		return "", ""
 	}
 	for _, bk := range list {
-		if bk.Name == bucket {
-			fmt.Fprintf(out, "Resolved bucket ID for %q: %s\n", bucket, bk.ID)
-			return bk.ID
+		if strings.EqualFold(bk.Name, bucket) {
+			if bk.Name != bucket {
+				fmt.Fprintf(out, "Using B2's spelling of the bucket name: %q\n", bk.Name)
+			}
+			fmt.Fprintf(out, "Resolved bucket ID for %q: %s\n", bk.Name, bk.ID)
+			return bk.ID, bk.Name
 		}
 	}
-	fmt.Fprintf(out, "Bucket %q not found in this account (or not visible to this key); enter its ID manually.\n", bucket)
-	return ""
+	fmt.Fprintf(out, "Bucket %q not found in this account (or not visible to this key); %s.\n", bucket, followUp)
+	return "", ""
 }
 
 // Watch adds an existing directory to the watch list.
@@ -350,8 +359,15 @@ func List(ctx context.Context, st *store.Store, out io.Writer) error {
 	return tw.Flush()
 }
 
-// Status prints whether configured, folder count, and pending upload count.
-func Status(ctx context.Context, st *store.Store, out io.Writer) error {
+// ServiceProbe reports the background service's state for `bb status` (e.g.
+// "active", "inactive", "not installed"), or "" when there is none to report.
+type ServiceProbe func(ctx context.Context) string
+
+// Status prints whether configured, the backend, folder and pending-upload
+// counts, whether a daemon is running (from the PID file in stateDir), and the
+// service state when service is non-nil. The daemon and service lines are
+// best-effort: they never fail the command.
+func Status(ctx context.Context, st *store.Store, stateDir string, service ServiceProbe, out io.Writer) error {
 	configured, err := st.IsConfigured(ctx)
 	if err != nil {
 		return err
@@ -375,6 +391,16 @@ func Status(ctx context.Context, st *store.Store, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "Status: configured\nBackend: %s\nWatched folders: %d\nPending uploads: %d\n",
 		backend, len(folders), pending)
+	if pid, ok := daemon.RunningPID(stateDir); ok {
+		fmt.Fprintf(out, "Daemon: running (pid %d)\n", pid)
+	} else {
+		fmt.Fprintln(out, "Daemon: not running")
+	}
+	if service != nil {
+		if state := service(ctx); state != "" {
+			fmt.Fprintf(out, "Service: %s\n", state)
+		}
+	}
 	return nil
 }
 
@@ -409,9 +435,10 @@ func Config(ctx context.Context, st *store.Store, out io.Writer) error {
 // Bucket shows the current bucket (no name) or switches to another bucket,
 // changing only the bucket name + ID and leaving credentials, endpoint, region,
 // and backend untouched. When a name is given without an explicit id, the id is
-// auto-resolved from the account via lister (the same lookup init uses); if that
-// lookup fails or the bucket isn't found, the stored bucket ID is cleared
-// (S3-only). An explicit id is always used as-is.
+// auto-resolved from the account via lister (the same lookup init uses, which
+// also adopts B2's spelling of the name); if that lookup fails or the bucket
+// isn't found, the stored bucket ID is cleared (S3-only) and the output says
+// how to set it. An explicit id is always used as-is.
 func Bucket(ctx context.Context, st *store.Store, name, id string, lister BucketLister, out io.Writer) error {
 	if name == "" {
 		cfg, err := st.GetConfig(ctx)
@@ -426,7 +453,10 @@ func Bucket(ctx context.Context, st *store.Store, name, id string, lister Bucket
 		if err != nil {
 			return err
 		}
-		id = resolveBucketID(ctx, lister, cfg.KeyID, cfg.AppKey, name, out)
+		hint := fmt.Sprintf("set it with `bb bucket %s <bucket-id>`", name)
+		if rid, rname := resolveBucketID(ctx, lister, cfg.KeyID, cfg.AppKey, name, hint, out); rid != "" {
+			id, name = rid, rname
+		}
 	}
 	if err := st.SetBucket(ctx, name, id); err != nil {
 		return err

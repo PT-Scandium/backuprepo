@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -341,5 +342,51 @@ func TestRmRecursiveReportsPartialFailure(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "Local files were not touched") {
 		t.Errorf("no success summary on failure: %q", out.String())
+	}
+}
+
+// TestBucketsFallsBackForScopedKey is the regression for `bb buckets` failing
+// outright with a key restricted to one bucket: B2 denies the unfiltered list,
+// so it now shows the configured bucket (looked up by name) and says why. Only
+// an access denial falls back; other errors are returned as before.
+func TestBucketsFallsBackForScopedKey(t *testing.T) {
+	ctx := context.Background()
+	cfg := b2.Config{KeyID: "k", AppKey: "s", BucketName: "my-bucket"}
+	denied := fmt.Errorf("%w: list buckets: %w", apperr.ErrListFailed, apperr.ErrAccessDenied)
+	listDenied := func(context.Context, b2.Config) ([]b2.BucketInfo, error) { return nil, denied }
+	var findCalls int
+	findOne := func(_ context.Context, c b2.Config) ([]b2.BucketInfo, error) {
+		findCalls++
+		if c.BucketName != "my-bucket" {
+			t.Errorf("fallback looked up %q, want my-bucket", c.BucketName)
+		}
+		return []b2.BucketInfo{{Name: "my-bucket", ID: "bid", Type: "allPrivate"}}, nil
+	}
+
+	var out bytes.Buffer
+	if err := Buckets(ctx, cfg, listDenied, findOne, &out); err != nil {
+		t.Fatalf("Buckets: %v", err)
+	}
+	for _, s := range []string{"restricted to one", "my-bucket", "bid", "*"} {
+		if !strings.Contains(out.String(), s) {
+			t.Errorf("output missing %q:\n%s", s, out.String())
+		}
+	}
+
+	// A non-denial error does not fall back.
+	other := errors.New("network down")
+	findCalls = 0
+	err := Buckets(ctx, cfg, func(context.Context, b2.Config) ([]b2.BucketInfo, error) { return nil, other }, findOne, &bytes.Buffer{})
+	if !errors.Is(err, other) || findCalls != 0 {
+		t.Errorf("other error: err=%v findCalls=%d, want the error and no fallback", err, findCalls)
+	}
+	// A failed fallback reports the original denial.
+	failFind := func(context.Context, b2.Config) ([]b2.BucketInfo, error) { return nil, errors.New("also denied") }
+	if err := Buckets(ctx, cfg, listDenied, failFind, &bytes.Buffer{}); !errors.Is(err, apperr.ErrAccessDenied) {
+		t.Errorf("failed fallback: err=%v, want the original access denial", err)
+	}
+	// No configured bucket: nothing to fall back to.
+	if err := Buckets(ctx, b2.Config{KeyID: "k"}, listDenied, findOne, &bytes.Buffer{}); !errors.Is(err, apperr.ErrAccessDenied) {
+		t.Errorf("no bucket name: err=%v, want the denial", err)
 	}
 }

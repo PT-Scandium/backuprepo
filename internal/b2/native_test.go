@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -521,3 +522,25 @@ func TestB2AuthRejectsEmptyCreds(t *testing.T) {
 }
 
 var _ Backend = (*B2Backend)(nil)
+
+// TestListBucketsAccessDenied checks the typed status lets callers tell a
+// refused request (a scoped key listing every bucket) from other failures via
+// apperr.ErrAccessDenied, while the message keeps its old "status N" text.
+func TestListBucketsAccessDenied(t *testing.T) {
+	srv := b2TestServer(t, map[string][]byte{})
+	_, err := testB2Key(t, srv, "restricted").ListBuckets(context.Background())
+	if !errors.Is(err, apperr.ErrAccessDenied) || !errors.Is(err, apperr.ErrListFailed) {
+		t.Fatalf("restricted ListBuckets: err = %v, want ErrAccessDenied + ErrListFailed", err)
+	}
+	if !strings.Contains(err.Error(), "status 401") {
+		t.Errorf("error text changed: %v", err)
+	}
+	for _, e := range []error{errors.New("status 401"), statusError(500), fmt.Errorf("x: %w", statusError(404))} {
+		if errors.Is(e, apperr.ErrAccessDenied) {
+			t.Errorf("errors.Is(%v, ErrAccessDenied) = true", e)
+		}
+	}
+	if !errors.Is(fmt.Errorf("x: %w", statusError(403)), apperr.ErrAccessDenied) {
+		t.Error("wrapped 403 should match ErrAccessDenied")
+	}
+}

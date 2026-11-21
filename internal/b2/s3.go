@@ -169,12 +169,39 @@ func (u *S3Backend) Delete(ctx context.Context, key string) error {
 		}
 		return nil
 	}
-	_, err := u.client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-		Bucket: aws.String(u.bucket),
-		Delete: &types.Delete{Objects: ids, Quiet: aws.Bool(true)},
-	})
-	if err != nil {
-		return fmt.Errorf("%w: delete versions %s: %v", apperr.ErrDeleteFailed, key, err)
+	return deleteObjectBatches(ctx, u.client, u.bucket, key, ids)
+}
+
+// maxDeleteObjects is the S3 DeleteObjects limit on keys per request.
+const maxDeleteObjects = 1000
+
+// objectsDeleter is the slice of *s3.Client that deleteObjectBatches needs, so
+// tests can supply a fake.
+type objectsDeleter interface {
+	DeleteObjects(ctx context.Context, in *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error)
+}
+
+// deleteObjectBatches deletes ids (the versions of key) in requests of at most
+// maxDeleteObjects. DeleteObjects reports per-key failures in the response
+// body, not as a request error, so a request that "succeeded" can still have
+// failed to delete some versions; those are returned as ErrDeleteFailed. It
+// stops at the first failing batch.
+func deleteObjectBatches(ctx context.Context, api objectsDeleter, bucket, key string, ids []types.ObjectIdentifier) error {
+	for start := 0; start < len(ids); start += maxDeleteObjects {
+		end := min(start+maxDeleteObjects, len(ids))
+		out, err := api.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+			Bucket: aws.String(bucket),
+			Delete: &types.Delete{Objects: ids[start:end], Quiet: aws.Bool(true)},
+		})
+		if err != nil {
+			return fmt.Errorf("%w: delete versions %s: %v", apperr.ErrDeleteFailed, key, err)
+		}
+		if out != nil && len(out.Errors) > 0 {
+			e := out.Errors[0]
+			return fmt.Errorf("%w: delete versions %s: %d of %d not deleted (first: version %s: %s %s)",
+				apperr.ErrDeleteFailed, key, len(out.Errors), end-start,
+				aws.ToString(e.VersionId), aws.ToString(e.Code), aws.ToString(e.Message))
+		}
 	}
 	return nil
 }

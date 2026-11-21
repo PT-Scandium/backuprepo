@@ -251,13 +251,8 @@ func hashFile(path string) (string, error) {
 	}
 	defer f.Close()
 	h := sha256.New()
-	if _, err := copyInto(h, f); err != nil {
+	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-// copyInto streams src into dst, returning the number of bytes copied.
-func copyInto(dst io.Writer, src io.Reader) (int64, error) {
-	return io.Copy(dst, src)
 }

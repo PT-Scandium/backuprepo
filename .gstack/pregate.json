@@ -1,0 +1,200 @@
+{
+  "$schema": "https://github.com/garrytan/gstack/docs/pregate.md#pregate-v1",
+  "runner": "sh scripts/pregate-go-test.sh {files}",
+  "dependencies": {
+    "cmd/bump/main.go": [
+      "cmd/bump/main_test.go"
+    ],
+    "internal/apperr/errors.go": [
+      "internal/b2/fake_test.go",
+      "internal/b2/native_test.go",
+      "internal/backup/backup_test.go",
+      "internal/cli/cli_test.go",
+      "internal/cli/cli_windows_test.go",
+      "internal/cli/files_test.go",
+      "internal/cli/service_test.go",
+      "internal/config/config_test.go",
+      "internal/crypto/crypto_test.go",
+      "internal/daemon/daemon_test.go",
+      "internal/daemon/proc_windows_test.go",
+      "internal/service/service_test.go",
+      "internal/store/store_test.go",
+      "internal/version/version_test.go",
+      "internal/web/server_test.go"
+    ],
+    "internal/b2/backend.go": [
+      "internal/b2/fake_test.go",
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go"
+    ],
+    "internal/b2/fake.go": [
+      "internal/b2/fake_test.go",
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go"
+    ],
+    "internal/b2/largefile.go": [
+      "internal/b2/fake_test.go",
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go"
+    ],
+    "internal/b2/native.go": [
+      "internal/b2/fake_test.go",
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go"
+    ],
+    "internal/b2/s3.go": [
+      "internal/b2/fake_test.go",
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go"
+    ],
+    "internal/backup/backup.go": [
+      "internal/backup/backup_test.go"
+    ],
+    "internal/cli/cli.go": [
+      "internal/cli/cli_test.go",
+      "internal/cli/cli_windows_test.go",
+      "internal/cli/files_test.go",
+      "internal/cli/service_test.go"
+    ],
+    "internal/cli/daemon.go": [
+      "internal/cli/cli_test.go",
+      "internal/cli/cli_windows_test.go",
+      "internal/cli/files_test.go",
+      "internal/cli/service_test.go"
+    ],
+    "internal/cli/files.go": [
+      "internal/cli/cli_test.go",
+      "internal/cli/cli_windows_test.go",
+      "internal/cli/files_test.go",
+      "internal/cli/service_test.go"
+    ],
+    "internal/cli/service.go": [
+      "internal/cli/cli_test.go",
+      "internal/cli/cli_windows_test.go",
+      "internal/cli/files_test.go",
+      "internal/cli/service_test.go"
+    ],
+    "internal/cli/web.go": [
+      "internal/cli/cli_test.go",
+      "internal/cli/cli_windows_test.go",
+      "internal/cli/files_test.go",
+      "internal/cli/service_test.go"
+    ],
+    "internal/config/config.go": [
+      "internal/config/config_test.go"
+    ],
+    "internal/crypto/crypto.go": [
+      "internal/crypto/crypto_test.go"
+    ],
+    "internal/daemon/daemon.go": [
+      "internal/daemon/daemon_test.go",
+      "internal/daemon/proc_windows_test.go",
+      "internal/cli/cli_test.go"
+    ],
+    "internal/daemon/proc_linux.go": [
+      "internal/daemon/daemon_test.go",
+      "internal/daemon/proc_windows_test.go",
+      "internal/cli/cli_test.go"
+    ],
+    "internal/daemon/proc_other.go": [
+      "internal/daemon/daemon_test.go",
+      "internal/daemon/proc_windows_test.go",
+      "internal/cli/cli_test.go"
+    ],
+    "internal/daemon/proc_windows.go": [
+      "internal/daemon/daemon_test.go",
+      "internal/daemon/proc_windows_test.go",
+      "internal/cli/cli_test.go"
+    ],
+    "internal/daemon/signals_unix.go": [
+      "internal/daemon/daemon_test.go",
+      "internal/daemon/proc_windows_test.go"
+    ],
+    "internal/daemon/signals_windows.go": [
+      "internal/daemon/daemon_test.go",
+      "internal/daemon/proc_windows_test.go"
+    ],
+    "internal/service/service.go": [
+      "internal/service/service_test.go"
+    ],
+    "internal/store/store.go": [
+      "internal/store/store_test.go"
+    ],
+    "internal/version/version.go": [
+      "internal/version/version_test.go"
+    ],
+    "internal/web/owner_unix.go": [
+      "internal/web/server_test.go"
+    ],
+    "internal/web/owner_windows.go": [
+      "internal/web/server_test.go"
+    ],
+    "internal/web/server.go": [
+      "internal/web/server_test.go"
+    ],
+    "internal/web/template.go": [
+      "internal/web/server_test.go"
+    ],
+    "main.go": [
+      "main_test.go"
+    ],
+    "VERSION": [
+      "main_test.go",
+      "cmd/bump/main_test.go"
+    ],
+    "go.mod": [
+      "cmd/bump/main_test.go",
+      "internal/b2/fake_test.go",
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go",
+      "internal/backup/backup_test.go",
+      "internal/cli/cli_test.go",
+      "internal/cli/cli_windows_test.go",
+      "internal/cli/files_test.go",
+      "internal/cli/service_test.go",
+      "internal/config/config_test.go",
+      "internal/crypto/crypto_test.go",
+      "internal/daemon/daemon_test.go",
+      "internal/daemon/proc_windows_test.go",
+      "internal/service/service_test.go",
+      "internal/store/store_test.go",
+      "internal/version/version_test.go",
+      "internal/web/server_test.go",
+      "main_test.go"
+    ],
+    "go.sum": [
+      "cmd/bump/main_test.go",
+      "internal/b2/fake_test.go",
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go",
+      "internal/backup/backup_test.go",
+      "internal/cli/cli_test.go",
+      "internal/cli/cli_windows_test.go",
+      "internal/cli/files_test.go",
+      "internal/cli/service_test.go",
+      "internal/config/config_test.go",
+      "internal/crypto/crypto_test.go",
+      "internal/daemon/daemon_test.go",
+      "internal/daemon/proc_windows_test.go",
+      "internal/service/service_test.go",
+      "internal/store/store_test.go",
+      "internal/version/version_test.go",
+      "internal/web/server_test.go",
+      "main_test.go"
+    ],
+    "scripts/pregate-go-test.sh": [
+      "main_test.go"
+    ],
+    "Makefile": [],
+    "docs/windows-setup.html": [],
+    ".github/workflows/ci.yml": [],
+    ".gitignore": [],
+    "LICENSE": []
+  },
+  "empty_lanes": [],
+  "selection": {},
+  "warn": [],
+  "strays": {
+    "allow": []
+  }
+}

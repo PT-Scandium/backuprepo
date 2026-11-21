@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,11 @@ func (f *fakeRunner) run(_ context.Context, name string, args ...string) (string
 // whose unit reports "active" (healthy) unless a test overrides it.
 func newManager(t *testing.T) (*Manager, *fakeRunner) {
 	t.Helper()
+	// The fixtures model a Linux host (Unix exe paths, systemd). bb service
+	// refuses other OSes; TestUnsupportedOS covers that by setting GOOS.
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd user units are Linux-only; fixtures use Unix paths")
+	}
 	fr := &fakeRunner{
 		outputs: map[string]string{"--user is-active backuprepo.service": "active"},
 		errs:    map[string]error{},
@@ -120,7 +126,7 @@ func TestInstallWritesUnitAndStartsService(t *testing.T) {
 	if !reflect.DeepEqual(fr.calls, want) {
 		t.Errorf("systemctl calls = %q, want %q", fr.calls, want)
 	}
-	for _, s := range []string{"enabled and running", "journalctl --user -u backuprepo.service", "enable-linger"} {
+	for _, s := range []string{"enabled and running", "journalctl --user -u backuprepo.service"} { // the linger hint is LingerHint's (TestLingerHint)
 		if !strings.Contains(out.String(), s) {
 			t.Errorf("output missing %q:\n%s", s, out.String())
 		}
@@ -376,6 +382,7 @@ func TestNewManagerDefaultsToHomeConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	m, err := NewManager()
 	if err != nil {
 		t.Fatal(err)
@@ -465,6 +472,7 @@ func TestNewManagerIgnoresRelativeXDGConfigHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "relative/cfg")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	m, err := NewManager()
 	if err != nil {
 		t.Fatal(err)
@@ -474,5 +482,80 @@ func TestNewManagerIgnoresRelativeXDGConfigHome(t *testing.T) {
 	}
 	if m.Settle != DefaultSettle {
 		t.Errorf("Settle = %v, want %v", m.Settle, DefaultSettle)
+	}
+}
+
+// TestLingerHint checks the "enable lingering" note appears only while
+// lingering is off (loginctl prints "no" for a logged-in user without it).
+func TestLingerHint(t *testing.T) {
+	for _, tc := range []struct {
+		linger string
+		want   bool
+	}{{"no", true}, {"", true}, {"yes", false}} {
+		m, fr := newManager(t)
+		fr.outputs["show-user "+uid()+" --property=Linger --value"] = tc.linger
+		var out bytes.Buffer
+		m.LingerHint(context.Background(), &out)
+		if got := strings.Contains(out.String(), "loginctl enable-linger"); got != tc.want {
+			t.Errorf("Linger=%q: hint shown=%v, want %v:\n%s", tc.linger, got, tc.want, out.String())
+		}
+	}
+}
+
+// TestEnableLinger covers --linger: it enables lingering for the current UID,
+// skips the call when already on, and only warns on failure.
+func TestEnableLinger(t *testing.T) {
+	ctx := context.Background()
+	enable := "loginctl enable-linger " + uid()
+
+	m, fr := newManager(t)
+	fr.outputs["show-user "+uid()+" --property=Linger --value"] = "no" // real "off" answer
+	var out bytes.Buffer
+	m.EnableLinger(ctx, &out)
+	if !strings.Contains(strings.Join(fr.calls, "|"), enable) || !strings.Contains(out.String(), "Lingering enabled") {
+		t.Errorf("enable: calls %q, out %q", fr.calls, out.String())
+	}
+
+	m, fr = newManager(t)
+	fr.outputs["show-user "+uid()+" --property=Linger --value"] = "yes"
+	out.Reset()
+	m.EnableLinger(ctx, &out)
+	if strings.Contains(strings.Join(fr.calls, "|"), enable) || !strings.Contains(out.String(), "already enabled") {
+		t.Errorf("already on: calls %q, out %q", fr.calls, out.String())
+	}
+
+	m, fr = newManager(t)
+	fr.errs["enable-linger "+uid()] = errors.New("exit status 1")
+	fr.outputs["enable-linger "+uid()] = "Access denied"
+	out.Reset()
+	m.EnableLinger(ctx, &out)
+	if got := out.String(); !strings.Contains(got, "Warning: could not enable lingering") || !strings.Contains(got, "Access denied") {
+		t.Errorf("failure should warn with the detail: %q", got)
+	}
+}
+
+// TestState covers the `bb status` service line.
+func TestState(t *testing.T) {
+	ctx := context.Background()
+	m, fr := newManager(t)
+	if got := m.State(ctx); got != "not installed" {
+		t.Errorf("no unit: State = %q", got)
+	}
+	if err := m.writeUnit(Render(m.Exe, false)); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ out, want string }{
+		{"active", "active"}, {"failed", "failed"}, {"inactive", "inactive"}, {"", "unknown"},
+		// no user bus (SSH, cron, sudo): systemctl prints an error, not a state
+		{"Failed to connect to user scope bus via local transport: No such file or directory", "unknown"},
+	} {
+		fr.outputs["--user is-active backuprepo.service"] = tc.out
+		if got := m.State(ctx); got != tc.want {
+			t.Errorf("is-active %q: State = %q, want %q", tc.out, got, tc.want)
+		}
+	}
+	m.GOOS = "windows"
+	if got := m.State(ctx); got != "" {
+		t.Errorf("unsupported OS: State = %q, want empty", got)
 	}
 }
