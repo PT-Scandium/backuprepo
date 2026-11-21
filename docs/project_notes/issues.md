@@ -250,3 +250,14 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
     - `cli.Buckets` argument order is pinned by an AST test.
     - Notes now record the Remove-flush and partial-delete trade-offs.
   - **Not verified live:** whether B2's `bucketName` filter folds case; a real scoped-key `bb buckets` run; `--linger` on a machine where lingering is off (here it is already on). The user's service and daemon were not touched; `bb status` was run read-only.
+
+### 2026-11-21 - CI actions pinned; Windows CI repaired after v1.0.12; session wrap-up
+- **Status**: Done on `master` (1eea82c, 063bb9b, merge 503cebd), CI green on Linux and Windows for 503cebd. No release: the fixes are CI and test only, and the v1.0.12 binaries are unaffected.
+- **Description**: `actions/checkout` and `actions/setup-go` are pinned to commit SHAs (v4.4.0 `11d5960a`, v5.6.0 `40f1582b`, the same commits the moving tags pointed to). Running CI for that change showed that v1.0.12 had shipped with its Windows job red: a new web test failed on case-insensitive NTFS (see bugs.md). The test now skips there. The release process now requires green CI on the exact commit. Also this session: merged branches `fix/open-issues` and `ci/pin-actions` deleted; `qmd cleanup` dropped 163,032 orphaned vectors (index 914 MB → 442 MB).
+- **Open / next session**:
+  - **`/verify` consent:** with `.gstack/pregate.json` on `master`, `gstack-checks` needs one-time approval of the repo's commands before it runs them: `~/.claude/skills/gstack/bin/gstack-checks trust` (the user's call).
+  - **Optional Dependabot:** a `.github/dependabot.yml` (github-actions ecosystem) would keep the SHA pins updated.
+  - **Not live-verified:** whether B2's `bucketName` filter folds case; `bb buckets` with a real bucket-scoped key; `bb service install --linger` where lingering is off (it is on on the user's machine).
+  - **Account ID:** still in the public repo's git history (removed from the tree). Purging it needs a history rewrite and force-push; the user decides.
+  - **Global `~/.claude/CLAUDE.md`:** its "Project verification" block points notes at `project-notes.md` (this repo uses `docs/project_notes/`) and refers to a CI coverage threshold, which CI does not set. Not edited.
+  - **User's machine:** `~/.local/bin/bb` is v1.0.12 (checksum-verified). No watched folders, service not installed, lingering already on.
