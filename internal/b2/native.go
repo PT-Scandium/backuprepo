@@ -115,12 +115,26 @@ func (b *B2Backend) postJSON(ctx context.Context, auth *b2Auth, endpoint string,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status %d", resp.StatusCode)
+		return statusError(resp.StatusCode)
 	}
 	if out == nil {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// statusError is a non-200 HTTP status from a B2 API call. Its message is just
+// "status N", as before it was typed. A 401 or 403 also matches
+// apperr.ErrAccessDenied, so callers can tell a refused request (e.g. an
+// unfiltered b2_list_buckets with a key restricted to one bucket) from other
+// failures with errors.Is.
+type statusError int
+
+func (e statusError) Error() string { return fmt.Sprintf("status %d", int(e)) }
+
+// Is reports a 401/403 as apperr.ErrAccessDenied.
+func (e statusError) Is(target error) bool {
+	return target == apperr.ErrAccessDenied && (e == http.StatusUnauthorized || e == http.StatusForbidden)
 }
 
 // b2MaxUploadAttempts bounds how many times an upload (or upload-part) POST is
@@ -411,7 +425,7 @@ func (b *B2Backend) listBuckets(ctx context.Context, name string) ([]BucketInfo,
 		} `json:"buckets"`
 	}
 	if err := b.postJSON(ctx, auth, "b2_list_buckets", body, &resp); err != nil {
-		return nil, fmt.Errorf("%w: list buckets: %v", apperr.ErrListFailed, err)
+		return nil, fmt.Errorf("%w: list buckets: %w", apperr.ErrListFailed, err)
 	}
 	out := make([]BucketInfo, 0, len(resp.Buckets))
 	for _, bk := range resp.Buckets {

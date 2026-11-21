@@ -122,6 +122,7 @@ func TestInstallWritesUnitAndStartsService(t *testing.T) {
 		"systemctl --user reset-failed backuprepo.service",
 		"systemctl --user restart backuprepo.service",
 		"systemctl --user is-active backuprepo.service",
+		"loginctl show-user " + uid() + " --property=Linger --value", // decides the linger hint
 	}
 	if !reflect.DeepEqual(fr.calls, want) {
 		t.Errorf("systemctl calls = %q, want %q", fr.calls, want)
@@ -482,5 +483,76 @@ func TestNewManagerIgnoresRelativeXDGConfigHome(t *testing.T) {
 	}
 	if m.Settle != DefaultSettle {
 		t.Errorf("Settle = %v, want %v", m.Settle, DefaultSettle)
+	}
+}
+
+// TestInstallLingerHint checks the "enable lingering" note appears only while
+// lingering is off.
+func TestInstallLingerHint(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		m, fr := newManager(t)
+		if on {
+			fr.outputs["show-user "+uid()+" --property=Linger --value"] = "yes"
+		}
+		var out bytes.Buffer
+		if err := m.Install(context.Background(), false, false, &out); err != nil {
+			t.Fatalf("Install: %v", err)
+		}
+		if got := strings.Contains(out.String(), "loginctl enable-linger"); got == on {
+			t.Errorf("lingering=%v: hint shown=%v, want %v:\n%s", on, got, !on, out.String())
+		}
+	}
+}
+
+// TestEnableLinger covers --linger: it enables lingering for the current UID,
+// skips the call when already on, and only warns on failure.
+func TestEnableLinger(t *testing.T) {
+	ctx := context.Background()
+	enable := "loginctl enable-linger " + uid()
+
+	m, fr := newManager(t)
+	var out bytes.Buffer
+	m.EnableLinger(ctx, &out)
+	if !strings.Contains(strings.Join(fr.calls, "|"), enable) || !strings.Contains(out.String(), "Lingering enabled") {
+		t.Errorf("enable: calls %q, out %q", fr.calls, out.String())
+	}
+
+	m, fr = newManager(t)
+	fr.outputs["show-user "+uid()+" --property=Linger --value"] = "yes"
+	out.Reset()
+	m.EnableLinger(ctx, &out)
+	if strings.Contains(strings.Join(fr.calls, "|"), enable) || !strings.Contains(out.String(), "already enabled") {
+		t.Errorf("already on: calls %q, out %q", fr.calls, out.String())
+	}
+
+	m, fr = newManager(t)
+	fr.errs["enable-linger "+uid()] = errors.New("exit status 1")
+	fr.outputs["enable-linger "+uid()] = "Access denied"
+	out.Reset()
+	m.EnableLinger(ctx, &out)
+	if got := out.String(); !strings.Contains(got, "Warning: could not enable lingering") || !strings.Contains(got, "Access denied") {
+		t.Errorf("failure should warn with the detail: %q", got)
+	}
+}
+
+// TestState covers the `bb status` service line.
+func TestState(t *testing.T) {
+	ctx := context.Background()
+	m, fr := newManager(t)
+	if got := m.State(ctx); got != "not installed" {
+		t.Errorf("no unit: State = %q", got)
+	}
+	if err := m.writeUnit(Render(m.Exe, false)); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ out, want string }{{"active", "active"}, {"failed", "failed"}, {"", "unknown"}} {
+		fr.outputs["--user is-active backuprepo.service"] = tc.out
+		if got := m.State(ctx); got != tc.want {
+			t.Errorf("is-active %q: State = %q, want %q", tc.out, got, tc.want)
+		}
+	}
+	m.GOOS = "windows"
+	if got := m.State(ctx); got != "" {
+		t.Errorf("unsupported OS: State = %q, want empty", got)
 	}
 }

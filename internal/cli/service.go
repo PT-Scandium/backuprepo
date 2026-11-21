@@ -28,6 +28,7 @@ type ServiceManager interface {
 	Preflight(ctx context.Context, force bool) error
 	Active(ctx context.Context) bool
 	Install(ctx context.Context, deleteRemoved, force bool, out io.Writer) error
+	EnableLinger(ctx context.Context, out io.Writer)
 	Uninstall(ctx context.Context, out io.Writer) error
 	Status(ctx context.Context, out io.Writer) error
 }
@@ -38,8 +39,10 @@ type ServiceManager interface {
 // systemd reachability) run before the watch list or unit file is changed; only
 // a systemctl failure after that point can leave the folder added. stateDir is
 // ~/backup_repo (for the daemon PID file); home resolves "~" and the default.
+// With linger, lingering is enabled (best-effort) just before the install, so
+// the service also runs at boot and after logout.
 func ServiceInstall(ctx context.Context, st *store.Store, mgr ServiceManager, folder, home, stateDir string,
-	deleteRemoved, force bool, out io.Writer) error {
+	deleteRemoved, force, linger bool, out io.Writer) error {
 	if err := mgr.Supported(); err != nil {
 		return err
 	}
@@ -76,6 +79,9 @@ func ServiceInstall(ctx context.Context, st *store.Store, mgr ServiceManager, fo
 	}
 	if err := Watch(ctx, st, path, out); err != nil {
 		return err
+	}
+	if linger {
+		mgr.EnableLinger(ctx, out)
 	}
 	return mgr.Install(ctx, deleteRemoved, force, out)
 }

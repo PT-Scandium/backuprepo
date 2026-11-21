@@ -24,6 +24,7 @@ type fakeServiceManager struct {
 	installed     bool
 	deleteRemoved bool
 	force         bool
+	lingerCalls   int
 }
 
 func (f *fakeServiceManager) Supported() error                           { return f.unsupported }
@@ -31,6 +32,7 @@ func (f *fakeServiceManager) Active(context.Context) bool                { retur
 func (f *fakeServiceManager) Preflight(context.Context, bool) error      { return f.preflightErr }
 func (f *fakeServiceManager) Uninstall(context.Context, io.Writer) error { return nil }
 func (f *fakeServiceManager) Status(context.Context, io.Writer) error    { return nil }
+func (f *fakeServiceManager) EnableLinger(context.Context, io.Writer)    { f.lingerCalls++ }
 func (f *fakeServiceManager) Install(_ context.Context, del, force bool, _ io.Writer) error {
 	f.installed, f.deleteRemoved, f.force = true, del, force
 	return f.installErr
@@ -59,7 +61,7 @@ func TestServiceInstallDefaultsToDocuments(t *testing.T) {
 	}
 	mgr := &fakeServiceManager{}
 	var out bytes.Buffer
-	err := ServiceInstall(context.Background(), st, mgr, "", home, t.TempDir(), true, true, &out)
+	err := ServiceInstall(context.Background(), st, mgr, "", home, t.TempDir(), true, true, false, &out)
 	if err != nil {
 		t.Fatalf("ServiceInstall: %v", err)
 	}
@@ -88,7 +90,7 @@ func TestServiceInstallReusesEquivalentFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := ServiceInstall(ctx, st, &fakeServiceManager{}, "~/Documents", home, t.TempDir(), false, false, &out); err != nil {
+	if err := ServiceInstall(ctx, st, &fakeServiceManager{}, "~/Documents", home, t.TempDir(), false, false, false, &out); err != nil {
 		t.Fatalf("ServiceInstall: %v", err)
 	}
 	folders, _ := st.ListFolders(ctx)
@@ -129,7 +131,7 @@ func TestServiceInstallFailsBeforeChangingAnything(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := ServiceInstall(ctx, tc.st, tc.mgr, tc.folder, home, tc.stateDir, false, false, &bytes.Buffer{})
+			err := ServiceInstall(ctx, tc.st, tc.mgr, tc.folder, home, tc.stateDir, false, false, false, &bytes.Buffer{})
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("err = %v, want %v", err, tc.want)
 			}
@@ -152,7 +154,7 @@ func TestServiceInstallRestartsActiveUnit(t *testing.T) {
 	stateDir := t.TempDir()
 	_ = os.WriteFile(filepath.Join(stateDir, "daemon.pid"), []byte(strconv.Itoa(os.Getpid())), 0o600)
 	mgr := &fakeServiceManager{active: true}
-	if err := ServiceInstall(context.Background(), st, mgr, "", home, stateDir, false, false, &bytes.Buffer{}); err != nil {
+	if err := ServiceInstall(context.Background(), st, mgr, "", home, stateDir, false, false, false, &bytes.Buffer{}); err != nil {
 		t.Fatalf("ServiceInstall: %v", err)
 	}
 	if !mgr.installed {
@@ -165,7 +167,7 @@ func TestServiceInstallPropagatesInstallError(t *testing.T) {
 	home := t.TempDir()
 	_ = os.Mkdir(filepath.Join(home, "Documents"), 0o755)
 	mgr := &fakeServiceManager{installErr: apperr.ErrService}
-	err := ServiceInstall(context.Background(), st, mgr, "", home, t.TempDir(), false, false, &bytes.Buffer{})
+	err := ServiceInstall(context.Background(), st, mgr, "", home, t.TempDir(), false, false, false, &bytes.Buffer{})
 	if !errors.Is(err, apperr.ErrService) {
 		t.Fatalf("err = %v", err)
 	}
@@ -212,7 +214,7 @@ func TestServiceInstallRelativeStoredFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	mgr := &fakeServiceManager{}
-	err := ServiceInstall(ctx, st, mgr, "", home, t.TempDir(), true, false, &bytes.Buffer{})
+	err := ServiceInstall(ctx, st, mgr, "", home, t.TempDir(), true, false, false, &bytes.Buffer{})
 	if !errors.Is(err, apperr.ErrService) || !strings.Contains(err.Error(), "projects") {
 		t.Fatalf("--delete with relative folder: want ErrService naming it, got %v", err)
 	}
@@ -224,7 +226,7 @@ func TestServiceInstallRelativeStoredFolders(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := ServiceInstall(ctx, st, mgr, "", home, t.TempDir(), false, false, &out); err != nil {
+	if err := ServiceInstall(ctx, st, mgr, "", home, t.TempDir(), false, false, false, &out); err != nil {
 		t.Fatalf("without --delete: %v", err)
 	}
 	if !mgr.installed || !strings.Contains(out.String(), "Warning") {

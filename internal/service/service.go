@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -217,9 +218,60 @@ func (m *Manager) Install(ctx context.Context, deleteRemoved, force bool, out io
 	}
 	fmt.Fprintln(out, ").")
 	fmt.Fprintf(out, "Logs:   journalctl --user -u %s -f\n", UnitName)
-	fmt.Fprintln(out, "Note:   user services run while you are logged in; to keep backing up after logout")
-	fmt.Fprintln(out, "        and start at boot, run once: loginctl enable-linger $USER")
+	if !m.lingering(ctx) {
+		fmt.Fprintln(out, "Note:   user services run while you are logged in; to keep backing up after logout")
+		fmt.Fprintln(out, "        and start at boot, run once: loginctl enable-linger $USER  (or reinstall with --linger)")
+	}
 	return nil
+}
+
+// uid is the current user's numeric ID, the form loginctl accepts for a user.
+func uid() string { return strconv.Itoa(os.Getuid()) }
+
+// lingering reports whether systemd lingering is on for the current user. An
+// unanswerable query (no loginctl, no logind) reads as off.
+func (m *Manager) lingering(ctx context.Context) bool {
+	out, err := m.Run(ctx, "loginctl", "show-user", uid(), "--property=Linger", "--value")
+	return err == nil && out == "yes"
+}
+
+// EnableLinger turns on systemd lingering for the current user, so the user
+// service starts at boot and keeps running after logout. It changes the
+// user's login policy, so it only runs on request (`bb service install
+// --linger`). A failure is a warning, not an error: the service still runs
+// while the user is logged in.
+func (m *Manager) EnableLinger(ctx context.Context, out io.Writer) {
+	if m.lingering(ctx) {
+		fmt.Fprintln(out, "Lingering is already enabled: the service starts at boot and runs after logout.")
+		return
+	}
+	if res, err := m.Run(ctx, "loginctl", "enable-linger", uid()); err != nil {
+		detail := ""
+		if res != "" {
+			detail = ": " + res
+		}
+		fmt.Fprintf(out, "Warning: could not enable lingering (%v%s); run once: loginctl enable-linger $USER\n", err, detail)
+		return
+	}
+	fmt.Fprintln(out, "Lingering enabled: the service starts at boot and keeps running after logout.")
+}
+
+// State is the service's state for `bb status`: "not installed", or systemd's
+// is-active answer (active, inactive, failed, ...). It is "" where bb service
+// does not apply (not Linux), and "unknown" when systemd can't be asked.
+func (m *Manager) State(ctx context.Context) string {
+	if m.Supported() != nil {
+		return ""
+	}
+	_, exists, err := m.unitState()
+	if err != nil {
+		return "unknown"
+	}
+	if !exists {
+		return "not installed"
+	}
+	active, _ := m.Run(ctx, "systemctl", "--user", "is-active", UnitName)
+	return orUnknown(active)
 }
 
 // Uninstall stops and disables the unit and removes its file. It is a no-op if

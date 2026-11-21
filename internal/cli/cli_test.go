@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -161,11 +163,50 @@ func TestWatchRejectsMissingDir(t *testing.T) {
 func TestStatusNotConfigured(t *testing.T) {
 	st := newStore(t)
 	var out bytes.Buffer
-	if err := Status(context.Background(), st, &out); err != nil {
+	if err := Status(context.Background(), st, t.TempDir(), nil, &out); err != nil {
 		t.Fatalf("Status: %v", err)
 	}
 	if !strings.Contains(out.String(), "not configured") {
 		t.Fatalf("status should report not configured: %q", out.String())
+	}
+}
+
+// TestStatusShowsDaemonAndService covers the daemon and service lines `bb
+// status` gained: daemon state from the PID file, and the service state only
+// when a probe reports one.
+func TestStatusShowsDaemonAndService(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	if err := st.SaveConfig(ctx, store.RemoteConfig{KeyID: "k", AppKey: "s", Bucket: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	status := func(dir string, probe ServiceProbe) string {
+		t.Helper()
+		var out bytes.Buffer
+		if err := Status(ctx, st, dir, probe, &out); err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		return out.String()
+	}
+
+	idle := t.TempDir()
+	if got := status(idle, nil); !strings.Contains(got, "Daemon: not running") || strings.Contains(got, "Service:") {
+		t.Errorf("no PID file, no probe:\n%s", got)
+	}
+	if got := status(idle, func(context.Context) string { return "" }); strings.Contains(got, "Service:") {
+		t.Errorf("empty probe result should print no service line:\n%s", got)
+	}
+	if got := status(idle, func(context.Context) string { return "active" }); !strings.Contains(got, "Service: active") {
+		t.Errorf("probe result missing:\n%s", got)
+	}
+
+	// A PID file naming a live process (this test) reads as a running daemon.
+	live := t.TempDir()
+	if err := os.WriteFile(filepath.Join(live, "daemon.pid"), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(live, nil); !strings.Contains(got, fmt.Sprintf("Daemon: running (pid %d)", os.Getpid())) {
+		t.Errorf("live PID file:\n%s", got)
 	}
 }
 
@@ -274,6 +315,71 @@ func TestBucketAutoResolvesID(t *testing.T) {
 			t.Fatalf("got %s / %q, want new / empty", cfg.Bucket, cfg.BucketID)
 		}
 	})
+}
+
+// TestBucketLookupFoldsCase covers B2's case-insensitive bucket names: a
+// differently-cased name still resolves, and B2's spelling is what gets stored
+// (the S3 API needs the real spelling).
+func TestBucketLookupFoldsCase(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	if err := st.SaveConfig(ctx, store.RemoteConfig{KeyID: "k", AppKey: "secret", Bucket: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	lister := func(context.Context, b2.Config) ([]b2.BucketInfo, error) {
+		return []b2.BucketInfo{{Name: "SC-Office", ID: "sc-id"}}, nil
+	}
+	var out bytes.Buffer
+	if err := Bucket(ctx, st, "sc-office", "", lister, &out); err != nil {
+		t.Fatalf("Bucket: %v", err)
+	}
+	cfg, _ := st.GetConfig(ctx)
+	if cfg.Bucket != "SC-Office" || cfg.BucketID != "sc-id" {
+		t.Fatalf("got %s / %s, want SC-Office / sc-id", cfg.Bucket, cfg.BucketID)
+	}
+	if !strings.Contains(out.String(), `Using B2's spelling of the bucket name: "SC-Office"`) {
+		t.Errorf("output should note the spelling change:\n%s", out.String())
+	}
+}
+
+// TestBucketFailedLookupSaysHowToSetID is the regression for `bb bucket <name>`
+// telling the user to "enter it manually" when it never prompts: the hint must
+// name the command that sets the ID.
+func TestBucketFailedLookupSaysHowToSetID(t *testing.T) {
+	for name, lister := range map[string]BucketLister{
+		"lookup error": func(context.Context, b2.Config) ([]b2.BucketInfo, error) { return nil, errors.New("status 401") },
+		"not found":    func(context.Context, b2.Config) ([]b2.BucketInfo, error) { return nil, nil },
+	} {
+		st := newStore(t)
+		ctx := context.Background()
+		if err := st.SaveConfig(ctx, store.RemoteConfig{KeyID: "k", AppKey: "secret", Bucket: "old"}); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if err := Bucket(ctx, st, "new-bkt", "", lister, &out); err != nil {
+			t.Fatalf("%s: Bucket: %v", name, err)
+		}
+		if got := out.String(); !strings.Contains(got, "set it with `bb bucket new-bkt <bucket-id>`") || strings.Contains(got, "manually") {
+			t.Errorf("%s: output should give the bb bucket command, not \"enter it manually\":\n%s", name, got)
+		}
+	}
+}
+
+// TestInitFoldsBucketCase checks init also adopts B2's spelling.
+func TestInitFoldsBucketCase(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	lister := func(context.Context, b2.Config) ([]b2.BucketInfo, error) {
+		return []b2.BucketInfo{{Name: "My-Bucket", ID: "auto-bid"}}, nil
+	}
+	in := strings.NewReader("keyid\nappkey\nmy-bucket\n\n\n\n")
+	if err := Init(ctx, st, in, &bytes.Buffer{}, lister); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	cfg, _ := st.GetConfig(ctx)
+	if cfg.Bucket != "My-Bucket" || cfg.BucketID != "auto-bid" {
+		t.Fatalf("got %s / %s, want My-Bucket / auto-bid", cfg.Bucket, cfg.BucketID)
+	}
 }
 
 // TestSetAppKeyChangesSecretOnly verifies SetAppKey updates only the secret and never echoes it.

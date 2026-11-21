@@ -17,6 +17,7 @@ var (
 	ErrDeleteFailed       = errors.New("bb: delete failed")
 	ErrObjectNotFound     = errors.New("bb: object not found")
 	ErrAuthFailed         = errors.New("bb: authentication failed")
+	ErrAccessDenied       = errors.New("bb: access denied (the key lacks this capability or bucket)")
 	ErrInvalidBackend     = errors.New("bb: invalid backend (use 's3' or 'b2')")
 	ErrStore              = errors.New("bb: database error")
 	ErrCrypto             = errors.New("bb: encryption error")
