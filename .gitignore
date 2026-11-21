@@ -1,3 +1,5 @@
 /backuprepo
 /bb
 dist/
+.codegraph/
+coverage.out
