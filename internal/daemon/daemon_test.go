@@ -391,8 +391,11 @@ func TestEnableDeletionsTurnsOnRemoveTrigger(t *testing.T) {
 	if d.deletions {
 		t.Fatal("deletions on before EnableDeletions")
 	}
+	if d.flushOn(fsnotify.Remove) {
+		t.Error("Remove triggers a flush without deletion propagation")
+	}
 	d.EnableDeletions(b2.NewFake())
-	if !d.deletions {
+	if !d.deletions || !d.flushOn(fsnotify.Remove) {
 		t.Error("EnableDeletions did not turn on the Remove trigger")
 	}
 }

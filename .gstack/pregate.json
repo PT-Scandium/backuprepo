@@ -24,23 +24,28 @@
     ],
     "internal/b2/backend.go": [
       "internal/b2/fake_test.go",
-      "internal/b2/native_test.go"
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go"
     ],
     "internal/b2/fake.go": [
       "internal/b2/fake_test.go",
-      "internal/b2/native_test.go"
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go"
     ],
     "internal/b2/largefile.go": [
       "internal/b2/fake_test.go",
-      "internal/b2/native_test.go"
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go"
     ],
     "internal/b2/native.go": [
       "internal/b2/fake_test.go",
-      "internal/b2/native_test.go"
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go"
     ],
     "internal/b2/s3.go": [
       "internal/b2/fake_test.go",
-      "internal/b2/native_test.go"
+      "internal/b2/native_test.go",
+      "internal/b2/s3_test.go"
     ],
     "internal/backup/backup.go": [
       "internal/backup/backup_test.go"
@@ -83,19 +88,23 @@
     ],
     "internal/daemon/daemon.go": [
       "internal/daemon/daemon_test.go",
-      "internal/daemon/proc_windows_test.go"
+      "internal/daemon/proc_windows_test.go",
+      "internal/cli/cli_test.go"
     ],
     "internal/daemon/proc_linux.go": [
       "internal/daemon/daemon_test.go",
-      "internal/daemon/proc_windows_test.go"
+      "internal/daemon/proc_windows_test.go",
+      "internal/cli/cli_test.go"
     ],
     "internal/daemon/proc_other.go": [
       "internal/daemon/daemon_test.go",
-      "internal/daemon/proc_windows_test.go"
+      "internal/daemon/proc_windows_test.go",
+      "internal/cli/cli_test.go"
     ],
     "internal/daemon/proc_windows.go": [
       "internal/daemon/daemon_test.go",
-      "internal/daemon/proc_windows_test.go"
+      "internal/daemon/proc_windows_test.go",
+      "internal/cli/cli_test.go"
     ],
     "internal/daemon/signals_unix.go": [
       "internal/daemon/daemon_test.go",
@@ -137,6 +146,7 @@
       "cmd/bump/main_test.go",
       "internal/b2/fake_test.go",
       "internal/b2/native_test.go",
+      "internal/b2/s3_test.go",
       "internal/backup/backup_test.go",
       "internal/cli/cli_test.go",
       "internal/cli/cli_windows_test.go",
@@ -156,6 +166,7 @@
       "cmd/bump/main_test.go",
       "internal/b2/fake_test.go",
       "internal/b2/native_test.go",
+      "internal/b2/s3_test.go",
       "internal/backup/backup_test.go",
       "internal/cli/cli_test.go",
       "internal/cli/cli_windows_test.go",

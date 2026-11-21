@@ -122,12 +122,11 @@ func TestInstallWritesUnitAndStartsService(t *testing.T) {
 		"systemctl --user reset-failed backuprepo.service",
 		"systemctl --user restart backuprepo.service",
 		"systemctl --user is-active backuprepo.service",
-		"loginctl show-user " + uid() + " --property=Linger --value", // decides the linger hint
 	}
 	if !reflect.DeepEqual(fr.calls, want) {
 		t.Errorf("systemctl calls = %q, want %q", fr.calls, want)
 	}
-	for _, s := range []string{"enabled and running", "journalctl --user -u backuprepo.service", "enable-linger"} {
+	for _, s := range []string{"enabled and running", "journalctl --user -u backuprepo.service"} { // the linger hint is LingerHint's (TestLingerHint)
 		if !strings.Contains(out.String(), s) {
 			t.Errorf("output missing %q:\n%s", s, out.String())
 		}
@@ -486,20 +485,19 @@ func TestNewManagerIgnoresRelativeXDGConfigHome(t *testing.T) {
 	}
 }
 
-// TestInstallLingerHint checks the "enable lingering" note appears only while
-// lingering is off.
-func TestInstallLingerHint(t *testing.T) {
-	for _, on := range []bool{false, true} {
+// TestLingerHint checks the "enable lingering" note appears only while
+// lingering is off (loginctl prints "no" for a logged-in user without it).
+func TestLingerHint(t *testing.T) {
+	for _, tc := range []struct {
+		linger string
+		want   bool
+	}{{"no", true}, {"", true}, {"yes", false}} {
 		m, fr := newManager(t)
-		if on {
-			fr.outputs["show-user "+uid()+" --property=Linger --value"] = "yes"
-		}
+		fr.outputs["show-user "+uid()+" --property=Linger --value"] = tc.linger
 		var out bytes.Buffer
-		if err := m.Install(context.Background(), false, false, &out); err != nil {
-			t.Fatalf("Install: %v", err)
-		}
-		if got := strings.Contains(out.String(), "loginctl enable-linger"); got == on {
-			t.Errorf("lingering=%v: hint shown=%v, want %v:\n%s", on, got, !on, out.String())
+		m.LingerHint(context.Background(), &out)
+		if got := strings.Contains(out.String(), "loginctl enable-linger"); got != tc.want {
+			t.Errorf("Linger=%q: hint shown=%v, want %v:\n%s", tc.linger, got, tc.want, out.String())
 		}
 	}
 }
@@ -511,6 +509,7 @@ func TestEnableLinger(t *testing.T) {
 	enable := "loginctl enable-linger " + uid()
 
 	m, fr := newManager(t)
+	fr.outputs["show-user "+uid()+" --property=Linger --value"] = "no" // real "off" answer
 	var out bytes.Buffer
 	m.EnableLinger(ctx, &out)
 	if !strings.Contains(strings.Join(fr.calls, "|"), enable) || !strings.Contains(out.String(), "Lingering enabled") {
@@ -545,7 +544,11 @@ func TestState(t *testing.T) {
 	if err := m.writeUnit(Render(m.Exe, false)); err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct{ out, want string }{{"active", "active"}, {"failed", "failed"}, {"", "unknown"}} {
+	for _, tc := range []struct{ out, want string }{
+		{"active", "active"}, {"failed", "failed"}, {"inactive", "inactive"}, {"", "unknown"},
+		// no user bus (SSH, cron, sudo): systemctl prints an error, not a state
+		{"Failed to connect to user scope bus via local transport: No such file or directory", "unknown"},
+	} {
 		fr.outputs["--user is-active backuprepo.service"] = tc.out
 		if got := m.State(ctx); got != tc.want {
 			t.Errorf("is-active %q: State = %q, want %q", tc.out, got, tc.want)

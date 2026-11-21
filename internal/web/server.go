@@ -276,7 +276,7 @@ func (s *Server) deletePath(ctx context.Context, path string) error {
 	// Match records the way the OS matches paths: resolveWatched (filepath.Rel)
 	// accepts a differently-cased path on Windows, so an exact comparison here
 	// would delete the local files but leave their backups and records behind.
-	recs := trackedRecords(files, path, info.IsDir(), runtime.GOOS)
+	recs := recordsToDelete(files, path, info.IsDir(), runtime.GOOS == "windows", string(filepath.Separator))
 	if info.IsDir() {
 		for _, fr := range recs {
 			if derr := s.be.Delete(ctx, fr.RemoteKey); derr != nil && !errors.Is(derr, apperr.ErrObjectNotFound) {
@@ -300,36 +300,66 @@ func (s *Server) deletePath(ctx context.Context, path string) error {
 	return os.Remove(path)
 }
 
-// trackedRecords returns the records for path: the one equal to it, or for a
-// directory every record at or beneath it. Paths compare as goos does
-// (case-insensitively on Windows).
-func trackedRecords(files []store.FileRecord, path string, isDir bool, goos string) []store.FileRecord {
+// recordsToDelete returns the records whose backups a delete of path should
+// purge: the record equal to path, or for a directory every record at or
+// beneath it. With fold (Windows) names compare case-insensitively, as the OS
+// does, but a record that matches only by folding must also name the same
+// directory or file on disk (os.SameFile): a per-directory case-sensitive
+// folder can hold both Docs and docs, and deleting Docs must not purge the
+// backups of docs. A record whose path can't be checked is left alone (its
+// backup is kept rather than deleted).
+func recordsToDelete(files []store.FileRecord, path string, isDir, fold bool, sep string) []store.FileRecord {
+	root := strings.TrimSuffix(path, sep)
+	var rootInfo os.FileInfo
 	var out []store.FileRecord
-	for _, fr := range files {
-		if pathEqual(fr.Path, path, goos) || isDir && pathUnder(fr.Path, path, goos) {
+	for _, fr := range trackedRecords(files, path, isDir, fold, sep) {
+		head := fr.Path // the part of fr.Path that names path itself
+		if len(fr.Path) > len(root) {
+			head = fr.Path[:len(root)]
+		}
+		if head == root {
+			out = append(out, fr)
+			continue
+		}
+		if rootInfo == nil {
+			var err error
+			if rootInfo, err = os.Stat(root); err != nil {
+				return out
+			}
+		}
+		if hi, err := os.Stat(head); err == nil && os.SameFile(hi, rootInfo) {
 			out = append(out, fr)
 		}
 	}
 	return out
 }
 
-// pathEqual compares two cleaned paths as goos does: case-insensitively on
-// Windows (NTFS default), exactly elsewhere.
-func pathEqual(a, b, goos string) bool {
-	if goos == "windows" {
+// trackedRecords returns the records for path by name alone: the one equal to
+// it, or for a directory every record at or beneath it, comparing
+// case-insensitively when fold is set. sep is the path separator.
+func trackedRecords(files []store.FileRecord, path string, isDir, fold bool, sep string) []store.FileRecord {
+	var out []store.FileRecord
+	for _, fr := range files {
+		if pathEqual(fr.Path, path, fold) || isDir && pathUnder(fr.Path, path, fold, sep) {
+			out = append(out, fr)
+		}
+	}
+	return out
+}
+
+// pathEqual compares two cleaned paths, case-insensitively when fold is set
+// (Windows: NTFS default).
+func pathEqual(a, b string, fold bool) bool {
+	if fold {
 		return strings.EqualFold(a, b)
 	}
 	return a == b
 }
 
-// pathUnder reports whether p lies strictly beneath dir, comparing as goos does.
-func pathUnder(p, dir, goos string) bool {
-	sep := "/"
-	if goos == "windows" {
-		sep = `\`
-	}
+// pathUnder reports whether p lies strictly beneath dir.
+func pathUnder(p, dir string, fold bool, sep string) bool {
 	prefix := strings.TrimSuffix(dir, sep) + sep
-	return len(p) > len(prefix) && pathEqual(p[:len(prefix)], prefix, goos)
+	return len(p) > len(prefix) && pathEqual(p[:len(prefix)], prefix, fold)
 }
 
 // handleClose renders the closed page and signals Serve to shut the server down.

@@ -218,11 +218,17 @@ func (m *Manager) Install(ctx context.Context, deleteRemoved, force bool, out io
 	}
 	fmt.Fprintln(out, ").")
 	fmt.Fprintf(out, "Logs:   journalctl --user -u %s -f\n", UnitName)
-	if !m.lingering(ctx) {
-		fmt.Fprintln(out, "Note:   user services run while you are logged in; to keep backing up after logout")
-		fmt.Fprintln(out, "        and start at boot, run once: loginctl enable-linger $USER  (or reinstall with --linger)")
-	}
 	return nil
+}
+
+// LingerHint tells the user how to keep the service running after logout and
+// start it at boot, unless lingering is already on.
+func (m *Manager) LingerHint(ctx context.Context, out io.Writer) {
+	if m.lingering(ctx) {
+		return
+	}
+	fmt.Fprintln(out, "Note:   user services run while you are logged in; to keep backing up after logout")
+	fmt.Fprintln(out, "        and start at boot, run once: loginctl enable-linger $USER  (or reinstall with --linger)")
 }
 
 // uid is the current user's numeric ID, the form loginctl accepts for a user.
@@ -271,7 +277,13 @@ func (m *Manager) State(ctx context.Context) string {
 		return "not installed"
 	}
 	active, _ := m.Run(ctx, "systemctl", "--user", "is-active", UnitName)
-	return orUnknown(active)
+	// Run returns combined output, so a failure to reach the user manager
+	// (no bus over SSH/cron/sudo) arrives as an error message, not a state.
+	switch active {
+	case "active", "inactive", "failed", "activating", "deactivating", "reloading", "maintenance", "refreshing":
+		return active
+	}
+	return "unknown"
 }
 
 // Uninstall stops and disables the unit and removes its file. It is a no-op if

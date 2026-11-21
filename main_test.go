@@ -330,6 +330,7 @@ func TestUsageErrorsCreateNoState(t *testing.T) {
 		{"bucket", "a", "b", "c"}, {"appkey", "a", "b"}, {"backend", "s3", "b2"},
 		{"ls", "--nope"}, {"upload", "--nope"}, {"start", "--nope"}, {"rm", "-q", "x"},
 		{"service"}, {"service", "bogus"}, {"service", "install", "--nope"}, {"service", "status", "x"},
+		{"ls", "--backend", "bogus"}, {"find", "--backend", "x", "q"}, {"rm", "p", "--backend=s4"}, {"backend", "bogus"},
 	} {
 		home := t.TempDir()
 		t.Setenv("HOME", home)
@@ -400,5 +401,30 @@ func TestBucketIDLookupWiring(t *testing.T) {
 		if !found[name] {
 			t.Errorf("no cli.%s call with a b2 bucket lookup found in main.go", name)
 		}
+	}
+	// cli.Buckets takes (listAll, findOne): both have the same type, so only
+	// this check notices them swapped (the scoped-key fallback would then
+	// list via FindBucket and "fall back" to the full list).
+	var bucketsArgs []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if fn, ok := call.Fun.(*ast.SelectorExpr); ok && fn.Sel.Name == "Buckets" {
+			if pkg, ok := fn.X.(*ast.Ident); ok && pkg.Name == "cli" {
+				for _, arg := range call.Args {
+					if sel, ok := arg.(*ast.SelectorExpr); ok {
+						if p, ok := sel.X.(*ast.Ident); ok && p.Name == "b2" {
+							bucketsArgs = append(bucketsArgs, sel.Sel.Name)
+						}
+					}
+				}
+			}
+		}
+		return true
+	})
+	if strings.Join(bucketsArgs, ",") != "ListBuckets,FindBucket" {
+		t.Errorf("cli.Buckets is passed b2.%v; want ListBuckets then FindBucket", bucketsArgs)
 	}
 }

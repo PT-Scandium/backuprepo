@@ -147,7 +147,7 @@ func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
 					_ = addRecursive(w, ev.Name)
 				}
 			}
-			if triggersFlush(ev.Op, d.deletions) {
+			if d.flushOn(ev.Op) {
 				select {
 				case events <- ev.Name:
 				default:
@@ -167,6 +167,10 @@ func (d *Daemon) Run(ctx context.Context, dir string, out io.Writer) error {
 		}
 	}
 }
+
+// flushOn reports whether this daemon should schedule a flush for op (see
+// triggersFlush), with Remove counting once EnableDeletions has run.
+func (d *Daemon) flushOn(op fsnotify.Op) bool { return triggersFlush(op, d.deletions) }
 
 // triggersFlush reports whether an fsnotify op should schedule a flush. Create,
 // Write and Rename change content (Rename matters because many editors save

@@ -98,7 +98,7 @@ Available once configured; all except `backend` accept `--backend s3|b2`:
 - `web` — localhost web UI (`bb serve`, port 9171): `html/template` page over stdlib `net/http`; lists watched folders' contents with backup state, Upload + Close buttons, 🗑️ delete (local + remote). `127.0.0.1`-only, no auth, Host-header guard + `Origin`/`Referer` CSRF check on POSTs; browsing/deletion confined to watched folders. OS owner via build-tagged `owner_{unix,windows}.go`. See ADR-015.
 - `version` — odometer version parse/bump, used only by `cmd/bump` (the binary embeds `VERSION` directly)
 - `cmd/bump` — `make bump*` tool that rewrites `VERSION`
-- root `main.go` — dispatch (incl. `start`/`stop`/`serve`/`bucket`/`buckets`/`appkey`) + per-command FlagSet + effective-backend factory (`buildBackend`) + `b2ConfigFromStore` helper `run` validates arguments/flags (phase 1) before `config.Load`/`store.Open` (phase 2), so command-line errors create no state; `parseFlags` treats everything after `--` as positional (ADR-025).
+- root `main.go` — dispatch (incl. `start`/`stop`/`serve`/`bucket`/`buckets`/`appkey`) + per-command FlagSet + effective-backend factory (`buildBackend`) + `b2ConfigFromStore` helper. `run` validates arguments, flags and backend names (phase 1) before `config.Load`/`store.Open` (phase 2), so command-line errors create no state; `parseFlags` treats everything after `--` as positional (ADR-025).
 
 ### Reference docs
 

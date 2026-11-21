@@ -114,6 +114,9 @@ func run(args []string) int {
 		if e != nil {
 			return 1
 		}
+		if !validBackend(*backend) {
+			return fail(apperr.ErrInvalidBackend)
+		}
 		act = func() error {
 			be, err := buildBackend(ctx, st, *backend)
 			if err != nil {
@@ -127,6 +130,9 @@ func run(args []string) int {
 		pos, e := parseFlags(fs, rest)
 		if e != nil {
 			return 1
+		}
+		if !validBackend(*backend) {
+			return fail(apperr.ErrInvalidBackend)
 		}
 		if len(pos) < 1 {
 			return fail(fmt.Errorf("usage: bb find <query> [prefix]"))
@@ -146,6 +152,9 @@ func run(args []string) int {
 		if e != nil {
 			return 1
 		}
+		if !validBackend(*backend) {
+			return fail(apperr.ErrInvalidBackend)
+		}
 		if len(pos) < 1 {
 			return fail(fmt.Errorf("usage: bb get <remote> [local] [-r]"))
 		}
@@ -164,6 +173,9 @@ func run(args []string) int {
 		pos, e := parseFlags(fs, rest)
 		if e != nil {
 			return 1
+		}
+		if !validBackend(*backend) {
+			return fail(apperr.ErrInvalidBackend)
 		}
 		if len(pos) < 1 {
 			return fail(fmt.Errorf("usage: bb put <local> [remote] [-r] [--skip-existing]"))
@@ -185,6 +197,9 @@ func run(args []string) int {
 		if e != nil {
 			return 1
 		}
+		if !validBackend(*backend) {
+			return fail(apperr.ErrInvalidBackend)
+		}
 		if len(pos) < 1 {
 			return fail(fmt.Errorf("usage: bb rm <path> [-r] [-f]"))
 		}
@@ -202,6 +217,9 @@ func run(args []string) int {
 	case "backend":
 		if len(rest) > 1 {
 			return fail(fmt.Errorf("usage: bb backend [s3|b2]"))
+		}
+		if !validBackend(argAt(rest, 0)) {
+			return fail(apperr.ErrInvalidBackend)
 		}
 		act = func() error { return cli.Backend(ctx, st, argAt(rest, 0), os.Stdout) }
 	case "bucket":
@@ -313,7 +331,9 @@ func isHelpArg(a string) bool {
 // at the first non-flag token, so we resume parsing after each positional —
 // this lets `ls photos/ -r` and `rm brtest/ -r -f` behave like `ls -r photos/`.
 // A "--" ends flag parsing for good: everything after it is positional, so
-// `bb find -- -x -h` searches for "-x" with prefix "-h".
+// `bb find -- -x -h` searches for "-x" with prefix "-h". (A string flag given
+// "--" as a separate value, `--backend -- x`, also reads as the terminator;
+// harmless, since such a value fails validation anyway.)
 func parseFlags(fs *flag.FlagSet, args []string) ([]string, error) {
 	var positionals []string
 	for {
@@ -456,6 +476,11 @@ func parseServiceArgs(args []string) (serviceOpts, error) {
 	}
 	return opts, nil
 }
+
+// validBackend reports whether kind names a backend ("" means "not given").
+// run checks it before any state exists, so `bb ls --backend bogus` and
+// `bb backend bogus` fail without creating ~/backup_repo.
+func validBackend(kind string) bool { return kind == "" || kind == "s3" || kind == "b2" }
 
 // effectiveBackend resolves the backend kind: flag override → stored → "s3".
 func effectiveBackend(ctx context.Context, st *store.Store, override string) (string, error) {

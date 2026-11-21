@@ -194,7 +194,7 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 ### 2026-11-15 - Session wrap-up: open follow-ups (v1.0.8)
 - **Status**: Closed 2026-11-21 — every item below resolved or decided (see the 2026-11-21 entry, ADR-025)
 - **Description**: After v1.0.4–v1.0.8 (service, init/rm polish, no-echo init secret, watch/PID/unknown-command fixes, Windows PID identity + case-insensitive folders):
-  - ~~**Windows CI job**~~ — done 2026-11-21 (see entry below) (`windows-latest`, `go test ./...`) — Windows-specific code (ADR-016/024) has only been compiled/vetted, never executed.
+  - ~~**Windows CI job**~~ — done 2026-11-21 (see entry below): `windows-latest` runs `go test ./...`, so the Windows-specific code (ADR-016/024), until then only compiled and vetted, now runs.
   - ~~Web UI delete case check~~ — fixed 2026-11-21 (see entry below): (`web.deletePath`) used an exact-case prefix check while `resolveWatched` is case-insensitive on Windows (crafted-POST only).
   - ~~Windows per-directory case sensitivity / NTFS upcase table not honoured by folder matching.~~ — accepted limitation (ADR-025).
   - ~~`/verify` tests lane~~ — `.gstack/pregate.json` added 2026-11-21 (see entry below) (active once on `master`): was INCOMPLETE without a `.gstack/pregate.json` (full `go test ./...` is run manually instead).
@@ -231,7 +231,7 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 - **Notes**: Tests `TestHelpRequested` and `TestSubcommandHelpCreatesNoState` (every dispatch case, via the shared `dispatchCommands` AST helper, now also used by `TestIsCommandMatchesDispatch`). The regression test fails with the check disabled (mutation-checked). Full suite, vet (linux/windows/darwin), gofmt clean; `helpRequested` 100% covered; smoke-tested the built binary against a temp HOME. Independent review: no blockers; applied its fixes (missed `writePID` "(on Linux)" comment, `-h=value`/`--help=value` via `isHelpArg`, top-level `bb --h`/`bb -help`, `bugs.md` `watch -h` wording, CLAUDE.md citation, package doc keeps the `backuprepo` name, usage-text assertion). By design a flag value of "-h" (`--folder -h`) is read as help. Since fixed (2026-11-21, ADR-025): `parseFlags` protected only the first argument after `--` (`bb find -- foo -h` still reaches the flag package, exits 1 and creates state); a bad flag or wrong argument count (`bb ls --nope`, `bb watch`) still creates `~/backup_repo` before failing. A Remove event alone still doesn't trigger a flush, so with `--delete` a deletion waits for the next event or the 5-minute scan.
 
 ### 2026-11-21 - All open issues processed (CI, destructive-path fixes, CLI follow-ups, decisions)
-- **Status**: Branch `fix/open-issues`, pushed with CI green on Linux and Windows. Not merged or released: the user asked for the open issues to be processed, not for a release.
+- **Status**: Branch `fix/open-issues`, CI green on Linux and Windows; released as **v1.0.12** after independent review (the user asked for the release).
 - **Description**:
   - **Infra:** CI on Linux + Windows; `make coverage` / `make lint`; `.gstack/pregate.json` + `scripts/pregate-go-test.sh`; CodeGraph index (`.codegraph/`, git-ignored).
   - **Destructive paths:** S3 `DeleteObjects` in batches of 1000, with per-key errors surfaced; the Windows web delete matches records case-insensitively.
@@ -241,4 +241,12 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
 - **Notes**:
   - **Tests:** every new test is listed in bugs.md. The S3, web, no-state and daemon regressions were mutation-checked (they fail with the fix reverted).
   - **CI:** the first Windows run found the Linux-only service fixtures; everything else passed on Windows.
+  - **Independent review:** no blockers. Its should-fix items were applied:
+    - Backend names are validated before any state is created.
+    - The `bb status` service line accepts only systemd state words, so bus errors read "unknown".
+    - Lingering is enabled only after a successful install, and the hint moved to `LingerHint`; tests cover the `--linger` wiring and loginctl's "no" answer.
+    - The web delete confirms fold-only matches on disk, so a case-sensitive sibling folder is never purged.
+    - `Run` passes the deletions flag through `flushOn`, which is tested.
+    - `cli.Buckets` argument order is pinned by an AST test.
+    - Notes now record the Remove-flush and partial-delete trade-offs.
   - **Not verified live:** whether B2's `bucketName` filter folds case; a real scoped-key `bb buckets` run; `--linger` on a machine where lingering is off (here it is already on). The user's service and daemon were not touched; `bb status` was run read-only.

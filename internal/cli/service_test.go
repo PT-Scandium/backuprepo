@@ -25,6 +25,7 @@ type fakeServiceManager struct {
 	deleteRemoved bool
 	force         bool
 	lingerCalls   int
+	hintCalls     int
 }
 
 func (f *fakeServiceManager) Supported() error                           { return f.unsupported }
@@ -33,6 +34,7 @@ func (f *fakeServiceManager) Preflight(context.Context, bool) error      { retur
 func (f *fakeServiceManager) Uninstall(context.Context, io.Writer) error { return nil }
 func (f *fakeServiceManager) Status(context.Context, io.Writer) error    { return nil }
 func (f *fakeServiceManager) EnableLinger(context.Context, io.Writer)    { f.lingerCalls++ }
+func (f *fakeServiceManager) LingerHint(context.Context, io.Writer)      { f.hintCalls++ }
 func (f *fakeServiceManager) Install(_ context.Context, del, force bool, _ io.Writer) error {
 	f.installed, f.deleteRemoved, f.force = true, del, force
 	return f.installErr
@@ -231,5 +233,36 @@ func TestServiceInstallRelativeStoredFolders(t *testing.T) {
 	}
 	if !mgr.installed || !strings.Contains(out.String(), "Warning") {
 		t.Errorf("want install + warning, got installed=%v out=%q", mgr.installed, out.String())
+	}
+}
+
+// TestServiceInstallLinger checks --linger enables lingering only after a
+// successful install, and that a plain install never touches login policy
+// (ADR-020) but prints the hint instead.
+func TestServiceInstallLinger(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		linger     bool
+		installErr error
+		wantLinger int
+		wantHint   int
+	}{
+		{linger: true, wantLinger: 1},
+		{linger: false, wantHint: 1},
+		{linger: true, installErr: errors.New("restart failed")}, // failed install: no policy change
+	} {
+		home := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(home, DefaultServiceFolder), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mgr := &fakeServiceManager{installErr: tc.installErr}
+		err := ServiceInstall(ctx, configuredStore(t), mgr, "", home, t.TempDir(), false, false, tc.linger, &bytes.Buffer{})
+		if (err != nil) != (tc.installErr != nil) {
+			t.Fatalf("linger=%v installErr=%v: err = %v", tc.linger, tc.installErr, err)
+		}
+		if mgr.lingerCalls != tc.wantLinger || mgr.hintCalls != tc.wantHint {
+			t.Errorf("linger=%v installErr=%v: EnableLinger %d, LingerHint %d; want %d, %d",
+				tc.linger, tc.installErr, mgr.lingerCalls, mgr.hintCalls, tc.wantLinger, tc.wantHint)
+		}
 	}
 }
