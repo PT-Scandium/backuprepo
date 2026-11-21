@@ -14,6 +14,12 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 
 ## Entries
 
+### 2026-11-21 - v1.0.12 shipped with its Windows CI job red (test-only)
+- **Issue**: `TestRecordsToDeleteSparesCaseSensitiveSibling`, added in the review follow-ups (89b776a), failed on `windows-latest` with `mkdir …\docs: Cannot create a file when that file already exists`. CI was red for 89b776a and for the v1.0.12 bump (3914fee), yet the release went ahead as "CI green".
+- **Root Cause**: (1) The test created `Docs` and `docs` before checking whether the filesystem folds case; on default NTFS the second `Mkdir` fails. (2) Process: the CI wait took `gh run list --limit 1` 10 s after the push, before GitHub had registered the new run, so it reported the previous commit's green run.
+- **Solution**: The test skips when creating `docs` reports `os.ErrExist`. Product code was unaffected: every other Windows test passed in the failing run, including `TestDeleteDifferentCaseRemovesBackupOnWindows`, and the v1.0.12 binaries are fine.
+- **Prevention**: Wait on the run whose `headSha` equals the pushed commit (`gh run list --commit <sha>`), never "the latest run".
+
 ### 2026-11-21 - S3 deletes could fail silently; web delete on Windows could orphan backups
 - **Issue**: (1) `S3Backend.Delete` sent every version in one `DeleteObjects` request (S3 allows at most 1000 keys) and ignored the response's per-key `Errors`, so a partial delete was reported as success. (2) On Windows the web UI accepted a differently-cased path (e.g. `c:\users\…`), deleted the local files, and left their remote objects and DB records behind.
 - **Root Cause**: (1) `Quiet: true` returns only failures, in the body; they were never read. (2) `resolveWatched` uses `filepath.Rel`, which folds case on Windows, but `deletePath` matched records with an exact prefix and derived the key from the request path.

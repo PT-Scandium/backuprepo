@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -223,15 +224,15 @@ func TestTrackedRecordsFoldsCaseOnWindows(t *testing.T) {
 func TestRecordsToDeleteSparesCaseSensitiveSibling(t *testing.T) {
 	base := t.TempDir()
 	upper, lower := filepath.Join(base, "Docs"), filepath.Join(base, "docs")
-	for _, d := range []string{upper, lower} {
-		if err := os.Mkdir(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.Mkdir(upper, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if fi, err := os.Stat(upper); err == nil {
-		if li, err := os.Stat(lower); err == nil && os.SameFile(fi, li) {
-			t.Skip("filesystem is case-insensitive; Docs and docs are one directory")
-		}
+	// On a case-insensitive filesystem (default Windows NTFS, macOS APFS)
+	// "docs" already exists as Docs, so there is no sibling to protect.
+	if err := os.Mkdir(lower, 0o755); errors.Is(err, os.ErrExist) {
+		t.Skip("filesystem is case-insensitive; Docs and docs are one directory")
+	} else if err != nil {
+		t.Fatal(err)
 	}
 	files := []store.FileRecord{
 		{Path: filepath.Join(upper, "a.txt"), RemoteKey: "upper-a"},
