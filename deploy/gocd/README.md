@@ -29,6 +29,7 @@ distrust every other mirror and stop all pipelines. Safe to re-run. **Do not
 `chown -R go:go`**: then edisonch can't push and the hooks fail.
 
 ```bash
+cd /   # sudo -u go git fails ("failed to stat") in a directory go can't read, e.g. under ~
 M=/var/lib/gocd-repos/backuprepo.git
 [ -d "${M:?}" ] || sudo git clone --bare --quiet /home/edisonch/projects/backuprepo "${M:?}"
 sudo chown -R edisonch:go "${M:?}"
@@ -87,5 +88,8 @@ If the commit was folded into a later run, trigger a run of it or tag the built 
 
 - "Modification check failed ... dubious ownership": the `safe.directory` line in step 1
   is missing for user `go`.
+- `sudo -u go git ...` prints "fatal: failed to stat '/home/edisonch/...': Permission
+  denied": it ran inside a directory `go` can't read. `cd /` and run it again (nothing
+  was changed by the failed run; seen 2026-11-21 during setup).
 - The mirror is behind `master`: `git push --no-verify /var/lib/gocd-repos/backuprepo.git +master:master`.
 - A task script with a literal hash breaks the whole config repo's parse: write two.
