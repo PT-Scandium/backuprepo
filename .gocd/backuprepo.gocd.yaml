@@ -4,7 +4,8 @@
 #
 # Config repo (registered once, via the API): id backuprepo, plugin yaml.config.plugin,
 #   material git file:///var/lib/gocd-repos/backuprepo.git, branch master,
-#   pattern *.gocd.yaml, rule: allow refer pipeline_group backuprepo.
+#   no file pattern (plugin default; *.gocd.yaml would match the repo root only),
+#   rule: allow refer pipeline_group backuprepo.
 # The mirror follows this clone's master through the post-commit, post-merge and
 # post-rewrite hooks (deploy/gocd/mirror-hook, installed into .git/hooks).
 #

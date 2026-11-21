@@ -14,6 +14,18 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 
 ## Entries
 
+### 2026-11-21 - GoCD: every material failed after a JDK upgrade (host-wide, not backuprepo code)
+- **Issue**: All seven GoCD materials (five Sentral apps, rentalmdl, backuprepo) failed with "Modification check failed … Error while executing [git config remote.origin.url]" / `[git clone …]`; service-sentral's 16:29 commit never built. The same git commands worked by hand as user `go`, and its `safe.directory` list was complete.
+- **Root Cause**: A `dnf upgrade` at 16:23 replaced `temurin-17-jdk` under the GoCD server and agent, which had been running since 2026-11-16. Java spawns child processes through the JDK's `jspawnhelper`, so with the package swapped underneath it, every `git` spawn failed. This was inferred from the timing and symptoms; the server log was not read.
+- **Solution**: `sudo systemctl restart go-server`, wait for `/go/api/v1/health`, then `sudo systemctl restart go-agent`. All errors cleared and service-sentral built `32e20a4` at once.
+- **Prevention**: After any JDK update on andromeda, restart go-server and go-agent. The symptom (every material red at once while manual git works) is in `deploy/gocd/README.md` Troubleshooting.
+
+### 2026-11-21 - GoCD config repo parsed but made no pipeline (`file_pattern`)
+- **Issue**: Config repo `backuprepo` parsed `3021489` with no error, but pipeline `backuprepo` didn't exist. I also missed this for about 10 minutes: the public `admin/config_repos` API always returns null parse info.
+- **Root Cause**: I registered it with `file_pattern = *.gocd.yaml`, which only matches the repo root; the file is `.gocd/backuprepo.gocd.yaml`. The other six repos leave the pattern unset (the plugin default, which searches subfolders).
+- **Solution**: PUT the config repo with `"configuration": []`. The pipeline appeared within about a minute.
+- **Prevention**: Copy a working config repo's exact `configuration` and rules. Read parse status from `/go/api/internal/config_repos`, and treat "parsed with no pipeline" as a failure.
+
 ### 2026-11-21 - v1.0.12 shipped with its Windows CI job red (test-only)
 - **Issue**: `TestRecordsToDeleteSparesCaseSensitiveSibling`, added in the review follow-ups (89b776a), failed on `windows-latest` with `mkdir …\docs: Cannot create a file when that file already exists`. CI was red for 89b776a and for the v1.0.12 bump (3914fee), yet the release went ahead as "CI green".
 - **Root Cause**: (1) The test created `Docs` and `docs` before checking whether the filesystem folds case; on default NTFS the second `Mkdir` fails. (2) Process: the CI wait took `gh run list --limit 1` 10 s after the push, before GitHub had registered the new run, so it reported the previous commit's green run.

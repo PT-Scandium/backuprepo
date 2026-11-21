@@ -60,16 +60,25 @@ While the mirror is missing, each prints one "not found, skipping" line and exit
 Done 2026-11-21 through the API with the owner's token (`-H @~/.config/gocd/owner.token`):
 `POST /go/api/admin/config_repos` (Accept `v4`) with id `backuprepo`, plugin
 `yaml.config.plugin`, material git `file:///var/lib/gocd-repos/backuprepo.git` branch
-`master`, pattern `*.gocd.yaml`, and one rule: allow · refer · pipeline_group ·
-`backuprepo`. Then the group's permissions: edisonch admin, the view-only user `claude`
-view (`PUT /go/api/admin/pipeline_groups/backuprepo`, v1, `If-Match` its ETag).
+`master`, **no file pattern** (`"configuration": []`, the plugin default, which also
+searches `.gocd/`; an explicit `*.gocd.yaml` matches the repo root only: it parsed fine and
+made no pipeline), and one rule: allow · refer · pipeline_group · `backuprepo`. Then the
+group's permissions, as rentalmdl's: `view` for the view-only user `claude` (edisonch is a
+GoCD system admin and needs no entry) (`PUT /go/api/admin/pipeline_groups/backuprepo`, v1,
+`If-Match` its ETag).
 
 The UI route, if it has to be redone: Admin > Config Repositories > Add, with the same
 values. Leave Username / Password **empty**: a browser-filled login ends up in the
 `file://` URL and git reads it as an ssh host ("Could not resolve hostname file").
 
 A config repo that fails to parse does so **silently**: no pipeline, no email. Check its
-parse status straight after any change to `.gocd/`.
+parse status straight after any change to `.gocd/`. Only the **internal** API returns it
+(`config_repo_parse_info` in the public `admin/config_repos` is always null); owner token:
+
+```bash
+curl -s -H @$HOME/.config/gocd/owner.token -H 'Accept: application/vnd.go.cd.v4+json' \
+  http://127.0.0.1:8153/go/api/internal/config_repos   # parse_info.good_modification / .error per repo
+```
 
 ## Checks (Claude's view-only token)
 
@@ -91,5 +100,11 @@ If the commit was folded into a later run, trigger a run of it or tag the built 
 - `sudo -u go git ...` prints "fatal: failed to stat '/home/edisonch/...': Permission
   denied": it ran inside a directory `go` can't read. `cd /` and run it again (nothing
   was changed by the failed run; seen 2026-11-21 during setup).
+- **Every** material fails at once with "Error while executing [git config remote.origin.url]"
+  (or `git clone ...`) while the same git commands work by hand as `go`: the JDK GoCD runs on
+  (`temurin-17-jdk`) was upgraded under the running server/agent, so Java can no longer spawn
+  processes. Fix: `sudo systemctl restart go-server`, wait for `/go/api/v1/health`, then
+  `sudo systemctl restart go-agent`. Seen 2026-11-21 after a 16:23 `dnf upgrade`; all seven
+  pipelines resumed after the restart.
 - The mirror is behind `master`: `git push --no-verify /var/lib/gocd-repos/backuprepo.git +master:master`.
 - A task script with a literal hash breaks the whole config repo's parse: write two.
