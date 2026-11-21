@@ -45,6 +45,7 @@ Make sure `~/.local/bin` is on your `PATH`. Other options:
 make                # just build ./bb in the repo (then run it as ./bb)
 sudo make install PREFIX=/usr/local/bin    # install system-wide
 make clean | uninstall | test | help       # housekeeping targets
+make coverage | lint                       # coverage report; vet (linux/windows/darwin) + gofmt check
 ```
 
 No `make`? `CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bb .` produces the same static binary (without `CGO_ENABLED=0` a host with cgo enabled builds a dynamically linked one). The stripped binary is ~22 MB.
@@ -58,10 +59,10 @@ Install, log in, and upload — using the **native B2 backend** (no S3 endpoint 
 | # | Step | Exactly what to do |
 |---|------|--------------------|
 | 1 | Open PowerShell | Press **Windows key** → type `powershell` → **Enter** |
-| 2 | Create a folder for the tool | `mkdir $env:LOCALAPPDATA\Programs\bb` |
-| 3 | Move the download and rename it | `move $env:USERPROFILE\Downloads\bb-v1.0.11-windows-amd64.exe $env:LOCALAPPDATA\Programs\bb\bb.exe` |
-| 4 | Remove the "downloaded from internet" block | `Unblock-File $env:LOCALAPPDATA\Programs\bb\bb.exe` |
-| 5 | Add it to your `PATH` | `[Environment]::SetEnvironmentVariable("Path",[Environment]::GetEnvironmentVariable("Path","User")+";$env:LOCALAPPDATA\Programs\bb","User")` |
+| 2 | Create a folder for the tool | `mkdir $env:USERPROFILE\bb` |
+| 3 | Move the download and rename it | `move $env:USERPROFILE\Downloads\bb-v1.0.11-windows-amd64.exe $env:USERPROFILE\bb\bb.exe` |
+| 4 | Remove the "downloaded from internet" block | `Unblock-File $env:USERPROFILE\bb\bb.exe` |
+| 5 | Add it to your `PATH` | `[Environment]::SetEnvironmentVariable("Path",[Environment]::GetEnvironmentVariable("Path","User")+";$env:USERPROFILE\bb","User")` |
 | 6 | Reopen PowerShell | Close the window → **Windows key** → `powershell` → **Enter** (`PATH` only applies to new windows) |
 | 7 | Check the install | `bb version` → prints `bb 1.0.11` |
 | 8 | Start setup | `bb init` |
@@ -79,7 +80,7 @@ Credentials are saved encrypted in `%USERPROFILE%\backup_repo\`. Confirm an uplo
 **Automatic backup instead of manual `put`:** run `bb watch C:\Users\you\Documents` once, then `bb upload` whenever you want changed files sent — it is a safe no-op when nothing changed. To have it run continuously at logon:
 
 ```powershell
-schtasks /create /tn "backuprepo" /sc onlogon /tr "$env:LOCALAPPDATA\Programs\bb\bb.exe start" /f
+schtasks /create /tn "backuprepo" /sc onlogon /tr "$env:USERPROFILE\bb\bb.exe start" /f
 ```
 
 Stop it with `bb stop`. Two Windows notes: the binary is **unsigned**, so SmartScreen shows *"Windows protected your PC"* on first run (**More info → Run anyway**); and `bb.exe` is a **console app** — double-clicking it just runs `bb status` and closes, so always call it from PowerShell.
@@ -130,7 +131,7 @@ If the lookup fails (for example the key lacks the `listBuckets` capability, or 
 - **Using only the native B2 backend?** Leave **endpoint** and **region** blank: `init` then switches to the `b2` backend automatically (it needs the bucket ID — looked up automatically from the bucket name, or entered at the prompt if the lookup fails). With neither an endpoint nor a bucket ID, `init` refuses rather than save a config that can't upload. (Required: keyID, applicationKey, bucket name.)
 - **Run `init` in a real terminal.** With no interactive input (e.g. `bb init </dev/null`, or a `!` shell inside an AI agent), it stops with `error: bb: input ended before setup was complete (run `bb init` in an interactive terminal)`.
 - **Stay configured:** credentials persist encrypted on disk, so you never log in interactively again — each command silently re-authorizes with Backblaze using the saved key. You only re-run `init` if the key changes or is revoked.
-- **Switch buckets later:** to point `bb` at a *different* bucket without re-entering credentials, use `bb bucket <name>` — the bucket ID is auto-resolved from your account (pass `bb bucket <name> <id>` to set it explicitly; if the lookup fails the ID is cleared, which is fine for an S3-only bucket). It changes only the bucket name + ID. Note: the stored key must have access to the new bucket — a bucket-scoped key won't, so for a bucket under a different key, re-run `init` instead.
+- **Switch buckets later:** to point `bb` at a *different* bucket without re-entering credentials, use `bb bucket <name>` — the bucket ID is auto-resolved from your account (pass `bb bucket <name> <id>` to set it explicitly; if the lookup fails the ID is cleared, which is fine for an S3-only bucket, and the message tells you that command). Bucket names aren't case sensitive in B2: `bb bucket sc-office` finds `SC-Office` and stores B2's spelling. It changes only the bucket name + ID. Note: the stored key must have access to the new bucket — a bucket-scoped key won't, so for a bucket under a different key, re-run `init` instead.
 - **Rotate the application key:** `bb appkey` reads a new applicationKey from **stdin** (so the secret stays out of `argv` and shell history) and replaces the stored one. When you run it interactively the input is **not echoed** to the screen; you can also pipe it from a secret store, and pass the new keyID to rotate the whole pair:
   ```sh
   pass show backblaze/b2-key | bb appkey 0005newkeyid   # rotate keyID + secret
@@ -202,7 +203,7 @@ bb service uninstall               # stop, disable and remove it (watched folder
 
 `bb service install` adds the folder to the watch list (default **`~/Documents`**; it must exist), writes a **systemd user unit** at `~/.config/systemd/user/backuprepo.service` that runs `bb start`, and runs `systemctl --user daemon-reload`, `enable` and `restart`. From then on the daemon starts at every login and backs up changes automatically. Pass `--delete` to bake deletion propagation into the service (see below).
 
-- **After logout / at boot:** user services run only while you're logged in. To keep backing up after logout and start at boot, run once: `loginctl enable-linger $USER`.
+- **After logout / at boot:** user services run only while you're logged in. To keep backing up after logout and start at boot, install with `--linger` (runs `loginctl enable-linger` for you; a failure is only a warning), or run `loginctl enable-linger $USER` once yourself. The install only prints this hint while lingering is off.
 - **Adding folders later:** the daemon reads the watch list at startup, so after `bb watch <dir>` run `systemctl --user restart backuprepo` (or `bb service install --folder <dir>`, which does both).
 - **Safety:** all checks run before the watch list or unit file is touched (only a later `systemctl` failure can leave the folder added). Install refuses if a daemon you started by hand (`bb start`) is running (`bb stop` it first), won't overwrite a hand-written `backuprepo.service` unless you pass `--force`, and refuses `--delete` while any watched folder is stored as a relative path (under systemd it would resolve against `$HOME`). After starting the unit it checks the daemon is still running and fails with a pointer to `journalctl` if not.
 - **If the unit keeps failing** at startup, systemd gives up after 5 starts within 10 minutes and leaves it `failed` (`bb service status`). Fix the cause, then re-run `bb service install` (it clears the failed state) or `systemctl --user reset-failed backuprepo && systemctl --user restart backuprepo`.
@@ -277,13 +278,13 @@ The applicationKey is masked (last 4 characters); the keyID is just an identifie
 | `bb` (no args) | Same as `status` |
 | `bb init` | Interactive setup (credentials, bucket name + ID, endpoint, region, optional first folder) |
 | `bb config` | Show current configuration (app key masked) |
-| `bb buckets` | List all buckets the key can see, with their IDs (native B2 API) |
+| `bb buckets` | List all buckets the key can see, with their IDs (native B2 API). A key restricted to one bucket can't list them all, so it shows just the configured bucket |
 | `bb bucket [<name> [<id>]]` | Show, or switch to another bucket — changes only the bucket name + ID (keeps credentials/endpoint/region) |
 | `bb appkey [<new-keyID>]` | Replace the stored application key — reads the secret from **stdin** (kept out of shell history); pass a new keyID to rotate the whole pair |
 | `bb watch <dir>` | Add an existing directory to the watch list |
 | `bb unwatch <dir>` | Remove a directory from the watch list |
 | `bb list` | List watched folders and tracked files with last-backup times |
-| `bb status` | Configured? backend, watched-folder count, pending uploads |
+| `bb status` | Configured? backend, watched-folder count, pending uploads, whether a daemon is running, and (Linux) the service state |
 | `bb upload [--delete]` | Upload every changed file; no-op if nothing changed. `--delete` also removes remotes for locally-deleted files |
 | `bb start [--delete]` | Run the watcher daemon (fsnotify + 5-min fallback scan) in the foreground until stopped |
 | `bb stop` | Signal a running daemon to shut down gracefully |
@@ -352,11 +353,10 @@ Two buttons at the bottom: **Upload changed files** (runs a backup now) and **Cl
 
 ## Roadmap
 
-Feature-complete against the original spec; current release **v1.0.11**. Design notes live in `docs/superpowers/`, decisions in `docs/project_notes/decisions.md`. Possible next steps (none blocking):
+Feature-complete against the original spec; current release **v1.0.11**. Design notes live in `docs/superpowers/`, decisions in `docs/project_notes/decisions.md`. Status of the former follow-ups:
 
-- A Windows CI job (`go test ./...` on `windows-latest`) — the Windows-specific daemon and path code is compiled and vetted but not yet run on Windows.
-- A leaner binary (~22 MB today).
-- Minor Windows path-case edge cases (web-UI delete prefix check; per-directory case sensitivity).
+- CI (`.github/workflows/ci.yml`) runs vet, the tests and a build on Linux and Windows for every push.
+- The ~22 MB binary size and Windows per-directory case sensitivity are accepted as they are (see ADR-025 in `docs/project_notes/decisions.md`).
 
 ---
 

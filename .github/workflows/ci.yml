@@ -28,6 +28,9 @@ jobs:
         run: go vet ./...
       - name: test
         run: go test -count=1 ./...
+      - name: Windows-specific tests (verbose, so the log shows they ran)
+        if: runner.os == 'Windows'
+        run: go test -count=1 -v -run "Windows|Proc|StopEvent|SameFolder" ./internal/...
       - name: gofmt
         if: runner.os == 'Linux'
         run: |

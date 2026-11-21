@@ -14,6 +14,24 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 
 ## Entries
 
+### 2026-11-21 - S3 deletes could fail silently; web delete on Windows could orphan backups
+- **Issue**: (1) `S3Backend.Delete` sent every version in one `DeleteObjects` request (S3 allows at most 1000 keys) and ignored the response's per-key `Errors`, so a partial delete was reported as success. (2) On Windows the web UI accepted a differently-cased path (e.g. `c:\users\…`), deleted the local files, and left their remote objects and DB records behind.
+- **Root Cause**: (1) `Quiet: true` returns only failures, in the body; they were never read. (2) `resolveWatched` uses `filepath.Rel`, which folds case on Windows, but `deletePath` matched records with an exact prefix and derived the key from the request path.
+- **Solution**: (1) `deleteObjectBatches` sends batches of 1000 keys, and any per-key error is `ErrDeleteFailed`. (2) `trackedRecords`/`pathEqual`/`pathUnder` match records the way the OS compares paths, and use each record's `RemoteKey` and `Path`.
+- **Prevention**: `TestDeleteObjectBatches*` (fake S3 client; mutation-checked) and `TestTrackedRecordsFoldsCaseOnWindows`. `TestDeleteDifferentCaseRemovesBackupOnWindows` runs on the Windows CI job. Destructive paths that compare paths should use one OS-aware comparison.
+
+### 2026-11-21 - Command-line errors created state; `--` protected one argument; bucket-command messages
+- **Issue**: `bb watch`, `bb ls --nope` or `bb service bogus` exited 1 after creating `~/backup_repo`. In `bb find -- foo -h`, only `foo` was taken literally. A failed `bb bucket <name>` lookup said "enter it manually" but never prompted. `bb buckets` failed outright with a key restricted to one bucket. A bucket name typed in the wrong case was "not found".
+- **Root Cause**: `run` opened the config and store before checking arguments. `parseFlags` resumed flag parsing after the first positional following `--`. `resolveBucketID`'s message was written for `init`. The unfiltered list is denied for scoped keys. Name matching was exact, although B2 bucket names are not case sensitive.
+- **Solution**: Two-phase `run` (validate, then open state). `--` ends flag parsing. A per-caller follow-up hint (`bb bucket <name> <bucket-id>`). An `apperr.ErrAccessDenied`-gated fallback in `bb buckets`. Case-folded matching that stores B2's spelling. See ADR-025.
+- **Prevention**: `TestUsageErrorsCreateNoState` (18 cases, mutation-checked), `TestParseFlagsAnyOrder` `--` cases, `TestBucketFailedLookupSaysHowToSetID`, `TestBucketsFallsBackForScopedKey`, `TestBucketLookupFoldsCase`, `TestInitFoldsBucketCase`, `TestListBucketsAccessDenied`.
+
+### 2026-11-21 - `service` tests failed on Windows (found by the new Windows CI)
+- **Issue**: 14 `internal/service` tests failed on `windows-latest`: `binary path "/home/u/.local/bin/bb" is not absolute`, and `NewManager` tests got the runner's real home.
+- **Root Cause**: Test-only. The fixtures model a Linux host (Unix paths; `filepath.IsAbs` is host-dependent), and the tests set `HOME` but not `USERPROFILE`, which `os.UserHomeDir` reads on Windows. `bb service` itself refuses non-Linux.
+- **Solution**: `newManager` skips off Linux; the `NewManager` tests set `USERPROFILE` too. Every other package, including the Windows PID, stop-event and daemon code, passed on Windows on the first run.
+- **Prevention**: CI runs Windows on every push.
+
 ### 2026-11-19 - `bb <command> -h` ran the command, created state, or used "-h" as a name
 - **Issue**: Flag commands (`upload/start/ls/find/get/put/rm/service install`) printed the flag package's usage and exited 1 after creating `~/backup_repo`. No-flag commands ignored `-h` and ran: `bb init -h` started setup, and `bb stop -h` stopped the daemon. Positional commands treated "-h" as a value: `bb watch -h` took it as the path `<cwd>/-h` (watched if that directory existed, otherwise "folder not found" after creating state), and `bb bucket -h` would switch to a bucket named "-h". Found in the 2026-11-18 docs audit.
 - **Root Cause**: `run` answered help only as the first argument (`bb -h`). Each subcommand's arguments reached `config.Load`/`store.Open` and the command itself unchecked.
@@ -40,7 +58,7 @@ Chronological log of bugs and their fixes. Each entry: date, issue, root cause, 
 
 ### 2026-07-06 - `bb buckets` 401 "authentication failed" — Account ID entered as keyID
 - **Issue**: After `bb init`, `bb buckets` (and any B2 op) failed with `authentication failed: status 401`. Config looked populated.
-- **Root Cause**: **User config error, not a code bug** — the stored **keyID was 12 hex chars** (`e02fd8314d56`), i.e. the Backblaze **Account ID**, not an applicationKey **keyID** (~25 chars). `b2_authorize_account` rejects the bad keyID+secret pair → 401, surfaced as `apperr.ErrAuthFailed`. (Two related config slips in the same session: **endpoint/region left blank** — harmless for `bb buckets`/native B2, breaks the default `s3` backend; and a **name/ID mismatch**, stored name `Scandiumsc` paired with `SC-OFFICE`'s bucket ID, from manually pasting an ID during a bad-cred init.)
+- **Root Cause**: **User config error, not a code bug** — the stored **keyID was 12 hex chars** (value redacted 2026-11-21), i.e. the Backblaze **Account ID**, not an applicationKey **keyID** (~25 chars). `b2_authorize_account` rejects the bad keyID+secret pair → 401, surfaced as `apperr.ErrAuthFailed`. (Two related config slips in the same session: **endpoint/region left blank** — harmless for `bb buckets`/native B2, breaks the default `s3` backend; and a **name/ID mismatch**, stored name `Scandiumsc` paired with `SC-OFFICE`'s bucket ID, from manually pasting an ID during a bad-cred init.)
 - **Solution**: Re-set credentials with `bb appkey <real-25-char-keyID>` (reads the secret no-echo from stdin — no full re-init). `bb bucket <name>` fixes the name/ID mismatch by auto-resolving a consistent pair (ADR-017).
 - **Prevention**: The **error type localized it**: `ErrAuthFailed` comes only from the `authorize` step (bad key pair), never from `b2_list_buckets` (a capability/permission problem would surface as `ErrListFailed: ... status 401`). Remember: **keyID ≠ Account ID ≠ keyName**; only keyID + applicationKey authenticate, and `keyName` is not stored by `bb`. Documented in key_facts.md "Credential gotcha".
 
