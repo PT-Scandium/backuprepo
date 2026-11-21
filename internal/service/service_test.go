@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,11 @@ func (f *fakeRunner) run(_ context.Context, name string, args ...string) (string
 // whose unit reports "active" (healthy) unless a test overrides it.
 func newManager(t *testing.T) (*Manager, *fakeRunner) {
 	t.Helper()
+	// The fixtures model a Linux host (Unix exe paths, systemd). bb service
+	// refuses other OSes; TestUnsupportedOS covers that by setting GOOS.
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd user units are Linux-only; fixtures use Unix paths")
+	}
 	fr := &fakeRunner{
 		outputs: map[string]string{"--user is-active backuprepo.service": "active"},
 		errs:    map[string]error{},
@@ -376,6 +382,7 @@ func TestNewManagerDefaultsToHomeConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	m, err := NewManager()
 	if err != nil {
 		t.Fatal(err)
@@ -465,6 +472,7 @@ func TestNewManagerIgnoresRelativeXDGConfigHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", "relative/cfg")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	m, err := NewManager()
 	if err != nil {
 		t.Fatal(err)

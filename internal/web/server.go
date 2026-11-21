@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -268,29 +269,67 @@ func (s *Server) deletePath(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
+	files, err := s.store.ListFiles(ctx)
+	if err != nil {
+		return err
+	}
+	// Match records the way the OS matches paths: resolveWatched (filepath.Rel)
+	// accepts a differently-cased path on Windows, so an exact comparison here
+	// would delete the local files but leave their backups and records behind.
+	recs := trackedRecords(files, path, info.IsDir(), runtime.GOOS)
 	if info.IsDir() {
-		files, err := s.store.ListFiles(ctx)
-		if err != nil {
-			return err
-		}
-		prefix := path + string(filepath.Separator)
-		for _, fr := range files {
-			if fr.Path == path || strings.HasPrefix(fr.Path, prefix) {
-				if derr := s.be.Delete(ctx, fr.RemoteKey); derr != nil && !errors.Is(derr, apperr.ErrObjectNotFound) {
-					return derr
-				}
-				_ = s.store.RemoveFile(ctx, fr.Path)
+		for _, fr := range recs {
+			if derr := s.be.Delete(ctx, fr.RemoteKey); derr != nil && !errors.Is(derr, apperr.ErrObjectNotFound) {
+				return derr
 			}
+			_ = s.store.RemoveFile(ctx, fr.Path)
 		}
 		return os.RemoveAll(path)
 	}
 	// Delete the remote object first so a failure leaves the local file intact.
-	key := backup.RemoteKey(path)
+	// Use the stored record's key and path when there is one: they carry the
+	// casing the file was backed up under.
+	key, recPath := backup.RemoteKey(path), path
+	if len(recs) > 0 {
+		key, recPath = recs[0].RemoteKey, recs[0].Path
+	}
 	if err := s.be.Delete(ctx, key); err != nil && !errors.Is(err, apperr.ErrObjectNotFound) {
 		return err
 	}
-	_ = s.store.RemoveFile(ctx, path)
+	_ = s.store.RemoveFile(ctx, recPath)
 	return os.Remove(path)
+}
+
+// trackedRecords returns the records for path: the one equal to it, or for a
+// directory every record at or beneath it. Paths compare as goos does
+// (case-insensitively on Windows).
+func trackedRecords(files []store.FileRecord, path string, isDir bool, goos string) []store.FileRecord {
+	var out []store.FileRecord
+	for _, fr := range files {
+		if pathEqual(fr.Path, path, goos) || isDir && pathUnder(fr.Path, path, goos) {
+			out = append(out, fr)
+		}
+	}
+	return out
+}
+
+// pathEqual compares two cleaned paths as goos does: case-insensitively on
+// Windows (NTFS default), exactly elsewhere.
+func pathEqual(a, b, goos string) bool {
+	if goos == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
+// pathUnder reports whether p lies strictly beneath dir, comparing as goos does.
+func pathUnder(p, dir, goos string) bool {
+	sep := "/"
+	if goos == "windows" {
+		sep = `\`
+	}
+	prefix := strings.TrimSuffix(dir, sep) + sep
+	return len(p) > len(prefix) && pathEqual(p[:len(prefix)], prefix, goos)
 }
 
 // handleClose renders the closed page and signals Serve to shut the server down.

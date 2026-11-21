@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -172,5 +173,84 @@ func TestDeleteRemovesLocalAndRemote(t *testing.T) {
 	}
 	if rec, err := st.GetFile(ctx, file); err != nil || rec != nil {
 		t.Fatalf("file record should be removed, got rec=%v err=%v", rec, err)
+	}
+}
+
+// TestTrackedRecordsFoldsCaseOnWindows checks record matching for the web
+// delete: case-insensitive on Windows (as resolveWatched's filepath.Rel is),
+// exact elsewhere, and directory matches stay on component boundaries.
+func TestTrackedRecordsFoldsCaseOnWindows(t *testing.T) {
+	win := []store.FileRecord{
+		{Path: `C:\Users\X\Docs\a.txt`, RemoteKey: "ka"},
+		{Path: `C:\Users\X\Docs\sub\b.txt`, RemoteKey: "kb"},
+		{Path: `C:\Users\X\Docsextra\c.txt`, RemoteKey: "kc"},
+	}
+	keys := func(rs []store.FileRecord) string {
+		var ks []string
+		for _, r := range rs {
+			ks = append(ks, r.RemoteKey)
+		}
+		return strings.Join(ks, ",")
+	}
+	for _, tc := range []struct {
+		files []store.FileRecord
+		path  string
+		isDir bool
+		goos  string
+		want  string
+	}{
+		{win, `c:\users\x\docs`, true, "windows", "ka,kb"}, // not Docsextra
+		{win, `c:\users\x\docs\A.TXT`, false, "windows", "ka"},
+		{win, `C:\Users\X\Docs\`, true, "windows", "ka,kb"}, // trailing separator
+		{win, `c:\users\x\docs\a.txt`, false, "linux", ""},
+		{[]store.FileRecord{{Path: "/home/u/Docs/a", RemoteKey: "k1"}, {Path: "/home/u/docs/b", RemoteKey: "k2"}},
+			"/home/u/Docs", true, "linux", "k1"},
+	} {
+		if got := keys(trackedRecords(tc.files, tc.path, tc.isDir, tc.goos)); got != tc.want {
+			t.Errorf("trackedRecords(%q, dir=%v, %s) = %q, want %q", tc.path, tc.isDir, tc.goos, got, tc.want)
+		}
+	}
+}
+
+// TestDeleteDifferentCaseRemovesBackupOnWindows is the regression for the web
+// delete on Windows: a differently-cased path passed resolveWatched, deleted
+// the local file, and left its remote object and record behind.
+func TestDeleteDifferentCaseRemovesBackupOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("needs a case-insensitive filesystem (Windows)")
+	}
+	s, st, fake, dir := newTestServer(t)
+	ctx := context.Background()
+	top := filepath.Join(dir, "Report.txt")
+	sub := filepath.Join(dir, "Sub")
+	inSub := filepath.Join(sub, "Inner.txt")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{top, inSub} {
+		if err := os.WriteFile(f, []byte("bytes"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := backup.New(st, fake).UploadChanged(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ target, file string }{
+		{strings.ToUpper(top), top},   // a file, upper-cased
+		{strings.ToLower(sub), inSub}, // a directory, lower-cased
+	} {
+		rec := do(s, "POST", "/delete", "path="+url.QueryEscape(tc.target))
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("delete %s: got %d (%s)", tc.target, rec.Code, rec.Body.String())
+		}
+		if _, err := os.Stat(tc.file); !os.IsNotExist(err) {
+			t.Errorf("delete %s: local file still present (stat err %v)", tc.target, err)
+		}
+		if _, ok := fake.Objects[backup.RemoteKey(tc.file)]; ok {
+			t.Errorf("delete %s: remote object still present", tc.target)
+		}
+		if r, err := st.GetFile(ctx, tc.file); err != nil || r != nil {
+			t.Errorf("delete %s: record still present (rec=%v err=%v)", tc.target, r, err)
+		}
 	}
 }
