@@ -503,5 +503,29 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 **Consequences:**
 - ✅ Usage, flag and backend-name mistakes leave no state behind. Bucket names typed in any case resolve. Scoped keys get a useful `bb buckets`.
 - ✅ The Windows-only code paths are now run by CI (`windows-latest`). The first run found Linux-only fixtures in the `service` tests; they now skip off Linux.
+  - **Update 2026-11-21:** superseded by ADR-026 — CI moved to the local GoCD; the Windows tests are compiled there but no longer run.
 - ⚠️ Still not covered: whether B2's `bucketName` filter folds case, and a real scoped-key run (the user's key is account-wide).
 - ⚠️ `bb backend` now rejects more than one argument. It used to ignore the extras.
+
+### ADR-026: CI on the local GoCD (andromeda) instead of GitHub Actions; Windows tests compiled, not run (2026-11-21)
+
+**Context:**
+- The owner doesn't use GitHub for CI. andromeda already runs GoCD (server + one Linux agent) for the Sentral apps and rentalmdl, building from bare mirrors under `/var/lib/gocd-repos` (pattern: rentalmdl `deploy/gocd/README.md`).
+- ADR-025 added a `windows-latest` job; it found real Windows-only test failures (bugs.md 2026-11-21). GoCD has no Windows agent.
+
+**Decision:**
+- `.gocd/backuprepo.gocd.yaml` (config repo `backuprepo`, own pipeline group `backuprepo`, rule limited to that group) is the only CI; `.github/workflows/ci.yml` is deleted. `origin` (GitHub) and GitHub releases are unchanged.
+- One `verify` stage, through Makefile targets so CI = local (only `go mod verify` and the hook-test script are called directly): `make lint` (vet linux/windows/darwin + gofmt), `make coverage`, `make wintest` (`GOOS=windows go test -c -o wintest/ ./...`: compiles **and links** every Windows test binary), `make build` + `make build-windows`. No `-race` (needs cgo; the build is `CGO_ENABLED=0`). No coverage threshold (none existed).
+- The mirror follows `master` via one tracked hook script (`deploy/gocd/mirror-hook`) installed as post-commit/post-merge/post-rewrite; it only ever warns and exits 0, and only this clone, only `master`, writes the mirror (force-push, single writer).
+- Release gate: a passed GoCD run that **built** the exact commit being tagged, i.e. `material_revisions[0].modifications[0].revision` (GoCD folds commits landing between polls into one run and lists them all; only `[0]` was built). Replaces `gh run list --commit`.
+
+**Alternatives Considered:**
+- Keep a Windows-only GitHub Actions job → Rejected by the owner (no GitHub CI).
+- Add a Windows GoCD agent now → Deferred: no Windows host for it; can be added later as a job with a `windows` resource.
+- Inline build commands like rentalmdl → Rejected: Makefile targets keep one source of truth and avoid GoCD's literal-hash parse trap.
+
+**Consequences:**
+- ✅ CI runs locally, with no external service; every check is reproducible with the same `make` targets.
+- ⚠️ **Windows tests no longer execute anywhere** — only compiled/linked and vetted. Regressions like the 2026-11-21 NTFS case-folding test failure would not be caught. Run `go test ./...` on a Windows machine before a release that touches build-tagged Windows code (`internal/daemon/*_windows.go`, `internal/web/owner_windows.go`, `cli_windows_test.go`) or case-folding logic.
+- ⚠️ Feature branches get no CI (only `master` is mirrored); the release gate moved from "CI on the branch before merge" to "GoCD on the commit being tagged".
+- ⚠️ The mirror and the hooks are machine-local; a fresh clone needs `deploy/gocd/README.md` steps 1–2 again.

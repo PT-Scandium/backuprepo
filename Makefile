@@ -26,7 +26,7 @@ export CGO_ENABLED := 0
 # Override, e.g.:  make install PREFIX=/usr/local/bin   (may need sudo)
 PREFIX ?= $(HOME)/.local/bin
 
-.PHONY: all build install uninstall clean test coverage vet lint fmt tidy help version bump bump-minor bump-major
+.PHONY: all build build-windows install uninstall clean test coverage wintest vet lint fmt tidy help version bump bump-minor bump-major
 
 all: build
 
@@ -66,7 +66,8 @@ uninstall:
 
 ## clean: remove the locally built binary
 clean:
-	rm -f $(BINARY)
+	rm -f $(BINARY) $(BINARY).exe
+	rm -rf wintest
 
 ## test: run the full test suite
 test:
@@ -76,6 +77,14 @@ test:
 coverage:
 	$(GO) test -count=1 -coverprofile=coverage.out ./...
 	$(GO) tool cover -func=coverage.out | tail -1
+
+## wintest: compile and link every Windows test binary into wintest/ (not run; ADR-026)
+wintest:
+	GOOS=windows GOARCH=amd64 $(GO) test -c -o wintest/ ./...
+
+## build-windows: compile the static, stripped bb.exe (windows/amd64)
+build-windows:
+	GOOS=windows GOARCH=amd64 $(GO) build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o $(BINARY).exe $(PKG)
 
 ## vet: run go vet across all packages
 vet:

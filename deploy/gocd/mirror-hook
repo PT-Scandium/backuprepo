@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+#
+# Git hook: mirror master to the bare repo the GoCD agent builds from
+# (/var/lib/gocd-repos/backuprepo.git; made by the sudo block in deploy/gocd/README.md).
+#
+# This one file is installed under three names, so the mirror follows master
+# however it moves:
+#   post-commit   commits, including --amend
+#   post-merge    merges and pulls (git merge does not run post-commit)
+#   post-rewrite  rebase and pull --rebase, which run neither of the above
+# Install (from the repo root):
+#   for h in post-commit post-merge post-rewrite; do install -m 0755 deploy/gocd/mirror-hook .git/hooks/$h; done
+# Modelled on rentalmdl's hooks (rentalmdl deploy/gocd/README.md).
+#
+# Only this clone writes the mirror (CANON, or a worktree of it, which shares its
+# branches), and only master, the branch the pipeline builds. With that single
+# writer the push can force (+): an amend or rebase replaces the old commit
+# instead of leaving the mirror on it.
+#
+# --no-verify: a push runs pre-push hooks even to a local path; the pipeline
+# runs the checks itself.
+#
+# It must never disrupt anything: the commit, merge or rebase has already
+# happened, so it always exits 0 and only ever warns.
+MIRROR=${BACKUPREPO_GOCD_MIRROR:-/var/lib/gocd-repos/backuprepo.git}
+CANON=${BACKUPREPO_GOCD_CANON:-/home/edisonch/projects/backuprepo/.git}
+TARGET=master
+HOOK=$(basename "$0")
+
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+[ "$common" = "$CANON" ] || exit 0
+
+BRANCH=$(git symbolic-ref --quiet --short HEAD 2>/dev/null)
+[ "$BRANCH" = "$TARGET" ] || exit 0
+
+if [ ! -d "$MIRROR" ]; then
+    echo "$HOOK: GoCD mirror $MIRROR not found, skipping (see deploy/gocd/README.md)" >&2
+    exit 0
+fi
+
+if err=$(git push --quiet --no-verify "$MIRROR" "+HEAD:refs/heads/${TARGET}" 2>&1); then
+    echo "$HOOK: mirrored ${TARGET} -> GoCD"
+else
+    echo "$HOOK: WARNING could not mirror ${TARGET} to $MIRROR:" >&2
+    printf '%s\n' "$err" | tail -n 3 | sed "s/^/$HOOK:   /" >&2
+    echo "$HOOK:   retry with: git push --no-verify $MIRROR +${TARGET}:${TARGET}" >&2
+fi
+
+exit 0

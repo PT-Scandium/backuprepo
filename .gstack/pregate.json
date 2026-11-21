@@ -187,7 +187,10 @@
     ],
     "Makefile": [],
     "docs/windows-setup.html": [],
-    ".github/workflows/ci.yml": [],
+    ".gocd/backuprepo.gocd.yaml": [],
+    "deploy/gocd/mirror-hook": [],
+    "deploy/gocd/mirror-hook_test.sh": [],
+    "deploy/gocd/README.md": [],
     ".gitignore": [],
     "LICENSE": []
   },
