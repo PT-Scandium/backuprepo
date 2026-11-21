@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS config (
   key_id_enc   BLOB, app_key_enc BLOB, created_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS folders (
-  path TEXT PRIMARY KEY, added_at INTEGER
+  path TEXT PRIMARY KEY, added_at INTEGER,
+  remote_prefix TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS files (
   path TEXT PRIMARY KEY, size INTEGER, mod_time INTEGER,
@@ -70,15 +71,34 @@ func Open(ctx context.Context, path string, key []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := addMissingColumns(ctx, db, "folders", []column{
+		{"remote_prefix", "ALTER TABLE folders ADD COLUMN remote_prefix TEXT NOT NULL DEFAULT ''"},
+	}); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &Store{db: db, key: key}, nil
 }
 
+// column is a column added after the initial schema, with the DDL that adds it.
+type column struct{ name, ddl string }
+
 // migrateConfigColumns adds columns introduced after the initial schema to
-// pre-existing config tables. SQLite has no "ADD COLUMN IF NOT EXISTS".
+// pre-existing config tables.
 func migrateConfigColumns(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(config)`)
+	return addMissingColumns(ctx, db, "config", []column{
+		{"bucket_id", "ALTER TABLE config ADD COLUMN bucket_id TEXT"},
+		{"backend", "ALTER TABLE config ADD COLUMN backend TEXT"},
+	})
+}
+
+// addMissingColumns runs the DDL of each column table lacks. SQLite has no
+// "ADD COLUMN IF NOT EXISTS", so the existing columns are read first. table is
+// always a constant from this package, never user input.
+func addMissingColumns(ctx context.Context, db *sql.DB, table string, cols []column) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
-		return fmt.Errorf("%w: table_info: %v", apperr.ErrStore, err)
+		return fmt.Errorf("%w: table_info %s: %v", apperr.ErrStore, table, err)
 	}
 	have := map[string]bool{}
 	for rows.Next() {
@@ -97,15 +117,12 @@ func migrateConfigColumns(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("%w: iterate columns: %v", apperr.ErrStore, err)
 	}
 	rows.Close()
-	for _, col := range []struct{ name, ddl string }{
-		{"bucket_id", "ALTER TABLE config ADD COLUMN bucket_id TEXT"},
-		{"backend", "ALTER TABLE config ADD COLUMN backend TEXT"},
-	} {
+	for _, col := range cols {
 		if have[col.name] {
 			continue
 		}
 		if _, err := db.ExecContext(ctx, col.ddl); err != nil {
-			return fmt.Errorf("%w: add column %s: %v", apperr.ErrStore, col.name, err)
+			return fmt.Errorf("%w: add column %s.%s: %v", apperr.ErrStore, table, col.name, err)
 		}
 	}
 	return nil
@@ -259,6 +276,18 @@ func (s *Store) AddFolder(ctx context.Context, path string) error {
 	return nil
 }
 
+// AddFolderWithPrefix records a watched folder whose files are stored under the
+// bucket prefix (ADR-027). Unlike AddFolder it fails if path is already watched;
+// change an existing folder's prefix with SetFolderPrefix.
+func (s *Store) AddFolderWithPrefix(ctx context.Context, path, prefix string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO folders (path, added_at, remote_prefix) VALUES (?, strftime('%s','now'), ?)`, path, prefix)
+	if err != nil {
+		return fmt.Errorf("%w: add folder: %v", apperr.ErrStore, err)
+	}
+	return nil
+}
+
 // RemoveFolder deletes a watched folder, or ErrFolderNotWatched if absent.
 func (s *Store) RemoveFolder(ctx context.Context, path string) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM folders WHERE path=?`, path)
@@ -287,6 +316,47 @@ func (s *Store) ListFolders(ctx context.Context) ([]string, error) {
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// Folder is a watched folder and the bucket prefix its files are stored under.
+// An empty RemotePrefix keeps the default object names (the absolute local
+// path without its leading "/", ADR-003); a non-empty one ends in "/" and
+// replaces the folder's own path in every object name (ADR-027).
+type Folder struct {
+	Path         string
+	RemotePrefix string
+}
+
+// ListWatched returns the watched folders with their bucket prefixes, sorted
+// by path.
+func (s *Store) ListWatched(ctx context.Context) ([]Folder, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT path, remote_prefix FROM folders ORDER BY path`)
+	if err != nil {
+		return nil, fmt.Errorf("%w: list folders: %v", apperr.ErrStore, err)
+	}
+	defer rows.Close()
+	var out []Folder
+	for rows.Next() {
+		var f Folder
+		if err := rows.Scan(&f.Path, &f.RemotePrefix); err != nil {
+			return nil, fmt.Errorf("%w: scan folder: %v", apperr.ErrStore, err)
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
+// SetFolderPrefix sets the bucket prefix of an already watched folder, or
+// returns ErrFolderNotWatched if path isn't on the watch list.
+func (s *Store) SetFolderPrefix(ctx context.Context, path, prefix string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE folders SET remote_prefix=? WHERE path=?`, prefix, path)
+	if err != nil {
+		return fmt.Errorf("%w: set folder prefix: %v", apperr.ErrStore, err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperr.ErrFolderNotWatched
+	}
+	return nil
 }
 
 // GetFile returns the tracked record for path, or (nil, nil) if untracked.

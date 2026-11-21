@@ -399,3 +399,23 @@ func TestEnableDeletionsTurnsOnRemoveTrigger(t *testing.T) {
 		t.Error("EnableDeletions did not turn on the Remove trigger")
 	}
 }
+
+// TestAdoptedNote: the scan line mentions adopted files only when there are any.
+func TestAdoptedNote(t *testing.T) {
+	if got := adoptedNote(0); got != "" {
+		t.Errorf("adoptedNote(0) = %q, want empty", got)
+	}
+	if got := adoptedNote(3); got != ", already in bucket 3" {
+		t.Errorf("adoptedNote(3) = %q", got)
+	}
+}
+
+// TestLookupNote: the scan line mentions failed hash lookups only when any failed.
+func TestLookupNote(t *testing.T) {
+	if got := lookupNote(0); got != "" {
+		t.Errorf("lookupNote(0) = %q, want empty", got)
+	}
+	if got := lookupNote(2); got != " (hash lookup failed for 2, uploaded instead)" {
+		t.Errorf("lookupNote(2) = %q", got)
+	}
+}

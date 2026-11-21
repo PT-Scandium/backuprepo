@@ -23,5 +23,6 @@ var (
 	ErrCrypto             = errors.New("bb: encryption error")
 	ErrDaemon             = errors.New("bb: daemon error")
 	ErrService            = errors.New("bb: service error")
+	ErrInvalidPrefix      = errors.New("bb: invalid bucket prefix")
 	ErrNoInput            = errors.New("bb: input ended before setup was complete (run `bb init` in an interactive terminal)")
 )

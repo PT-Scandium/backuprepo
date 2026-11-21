@@ -252,14 +252,32 @@ func (d *Daemon) debounce(ctx context.Context, events <-chan string, flush func(
 func (d *Daemon) flush(ctx context.Context, out io.Writer) {
 	res, err := d.svc.UploadChanged(ctx)
 	if err != nil {
-		fmt.Fprintf(out, "scan: uploaded %d, skipped %d, failed %d: %v\n",
-			res.Uploaded, res.Skipped, res.Failed, err)
+		fmt.Fprintf(out, "scan: uploaded %d, skipped %d, failed %d%s%s: %v\n",
+			res.Uploaded, res.Skipped, res.Failed, adoptedNote(res.Adopted), lookupNote(res.HashLookupsFailed), err)
 		return
 	}
-	if res.Uploaded > 0 || res.Deleted > 0 {
-		fmt.Fprintf(out, "scan: uploaded %d, skipped %d, deleted %d\n",
-			res.Uploaded, res.Skipped, res.Deleted)
+	if res.Uploaded > 0 || res.Deleted > 0 || res.Adopted > 0 {
+		fmt.Fprintf(out, "scan: uploaded %d, skipped %d, deleted %d%s%s\n",
+			res.Uploaded, res.Skipped, res.Deleted, adoptedNote(res.Adopted), lookupNote(res.HashLookupsFailed))
 	}
+}
+
+// adoptedNote is the ", already in bucket N" suffix for a scan line, or "" when
+// no file was adopted (keeps the usual line unchanged).
+func adoptedNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", already in bucket %d", n)
+}
+
+// lookupNote is the scan-line suffix for files uploaded because the SHA-1
+// lookup failed (ADR-027), or "" when none did.
+func lookupNote(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (hash lookup failed for %d, uploaded instead)", n)
 }
 
 // addRecursive adds a watch on root and every subdirectory beneath it. fsnotify

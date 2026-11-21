@@ -316,10 +316,27 @@ func (b *B2Backend) Exists(ctx context.Context, key string) (bool, error) {
 }
 
 type b2File struct {
-	FileName        string `json:"fileName"`
-	ContentLength   int64  `json:"contentLength"`
-	UploadTimestamp int64  `json:"uploadTimestamp"`
-	Action          string `json:"action"`
+	FileID          string            `json:"fileId"`
+	FileInfo        map[string]string `json:"fileInfo"`
+	FileName        string            `json:"fileName"`
+	ContentLength   int64             `json:"contentLength"`
+	ContentSha1     string            `json:"contentSha1"`
+	UploadTimestamp int64             `json:"uploadTimestamp"`
+	Action          string            `json:"action"`
+}
+
+// RemoteSHA1 returns the contentSha1 B2 recorded for key (see b2.ContentHasher).
+func (b *B2Backend) RemoteSHA1(ctx context.Context, key string) (string, bool, error) {
+	l, err := b.listRaw(ctx, key, "", 1)
+	if err != nil {
+		return "", false, err
+	}
+	for _, o := range l {
+		if o.Key == key {
+			return o.SHA1, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // listRaw returns objects under prefix (recursive, no delimiter), handling pagination.
@@ -349,9 +366,12 @@ func (b *B2Backend) listRaw(ctx context.Context, prefix, delimiter string, max i
 		}
 		for _, f := range resp.Files {
 			out = append(out, ObjectInfo{
-				Key:      f.FileName,
-				Size:     f.ContentLength,
-				Modified: msToTime(f.UploadTimestamp),
+				Key:         f.FileName,
+				Size:        f.ContentLength,
+				Modified:    msToTime(f.UploadTimestamp),
+				SHA1:        f.ContentSha1,
+				FileID:      f.FileID,
+				SrcModified: srcModified(f.FileInfo),
 			})
 			if max > 0 && len(out) >= max {
 				return out, nil
@@ -517,6 +537,16 @@ func urlEncodeSegment(s string) string {
 		b.WriteByte(upper[c&0xF])
 	}
 	return b.String()
+}
+
+// srcModified parses the src_last_modified_millis file info B2 tools record at
+// upload; zero when it is missing or malformed.
+func srcModified(info map[string]string) time.Time {
+	ms, err := strconv.ParseInt(info["src_last_modified_millis"], 10, 64)
+	if err != nil || ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
 }
 
 // msToTime converts a B2 millisecond timestamp to time.Time; 0 yields the zero time.

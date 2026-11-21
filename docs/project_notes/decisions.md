@@ -529,3 +529,28 @@ Architectural Decision Records (ADRs) for backuprepo. Numbered sequentially; inc
 - ⚠️ **Windows tests no longer execute anywhere** — only compiled/linked and vetted. Regressions like the 2026-11-21 NTFS case-folding test failure would not be caught. Run `go test ./...` on a Windows machine before a release that touches build-tagged Windows code (`internal/daemon/*_windows.go`, `internal/web/owner_windows.go`, `cli_windows_test.go`) or case-folding logic.
 - ⚠️ Feature branches get no CI (only `master` is mirrored); the release gate moved from "CI on the branch before merge" to "GoCD on the commit being tagged".
 - ⚠️ The mirror and the hooks are machine-local; a fresh clone needs `deploy/gocd/README.md` steps 1–2 again.
+
+### ADR-027: Per-folder bucket prefix (`watch --remote`) and adopting identical remote objects (2026-11-21)
+
+**Context:**
+- ADR-003 names every object after the file's absolute path (`home/me/Documents/X/a.pdf`). The owner needs real-time backup of `~/Documents/MANDALATAMA-SEWA` into an existing bucket folder `SC-OFFICE/MANDALATAMA-SEWA/` (88 files, Object Lock on, keep all versions), alongside `~/Documents` (Obsidian) in the same bucket. `bb put <local> <remote> -r` can target a prefix but is one-shot, and its `--skip-existing` misses edited files.
+- With Object Lock, every unneeded upload is a locked version that can't be deleted, so the 88 files must not be uploaded again after a `bb get` into the local folder.
+
+**Decision:**
+- New column `folders.remote_prefix TEXT NOT NULL DEFAULT ''` (migrated with a generalized `addMissingColumns`). `bb watch <dir> --remote P` stores it normalized (`/`-separated, no leading `/`, trailing `/`; empty, `.`/`..`, control chars refused); on a watched folder it changes the prefix. A prefix overlapping another folder's prefix or its default `RemoteKey(folder)/` names is refused (objects would overwrite each other).
+- `backup.KeyFor(folders, path)`: the **innermost** watched folder containing path decides; prefix → `P + rel`, no prefix → `RemoteKey(path)` (unchanged, so existing users see no re-upload). The walk skips nested watched roots so each file is visited once. Used by upload, `PendingCount` and the web delete fallback.
+- A record counts as backed up only under the key `KeyFor` gives now (an empty stored key, from before keys were recorded, matches only the default `RemoteKey(path)`). A prefix change therefore re-uploads under the new names; old objects are kept. `watch --remote`, a plain `watch` nested in a prefixed folder, and a nested `unwatch` print that files will be uploaded again; a plain `watch` whose default names collide with a prefixed folder is refused too. Nested roots are recognized by absolute path (legacy relative entries too), case-insensitively on Windows.
+- **Adopt:** for a file not backed up under its key, if the backend implements the optional `b2.ContentHasher` (native B2: `contentSha1` from `b2_list_file_names`) and the remote SHA-1 equals the local file's SHA-1, record it as backed up without uploading (`Result.Adopted`). Any doubt → upload: no capability (S3), not found, `none`/`unverified:` hashes, lookup error. A failed lookup is counted (`Result.HashLookupsFailed`) and shown on the daemon scan line and in `bb upload` — uploading (a possibly needless locked version) was preferred over retrying later (a key without `listFiles` would otherwise never back up new files). Edits to a file already backed up under its key always upload.
+
+**Alternatives Considered:**
+- A timed `bb put -r` job → Rejected: not real-time; either misses edits or re-uploads everything (new locked versions each run).
+- Size-only "already there" check → Rejected: an edited file of equal size would never be backed up.
+- Make `bb get` register downloaded files in the DB → Not chosen: only covers files fetched by `bb`, and couples manual commands to the watch DB; the hash check covers it and the prefix-change case.
+- Outermost folder wins for nested folders → Rejected: the inner `--remote` would be ignored for exactly the folder it was set on.
+
+**Consequences:**
+- ✅ `~/Documents/MANDALATAMA-SEWA` syncs in real time into `MANDALATAMA-SEWA/`; `bb get` + watch adopts the 88 existing objects (probe 2026-11-21: all 88 report a 40-hex `contentSha1`, and a download matched it).
+- ✅ No behavior change for folders without a prefix (same keys, same records).
+- ⚠️ Adopting costs one `b2_list_file_names` (class C) call per file that is new to its key; `PendingCount` still counts such files (telling them apart would need that call too).
+- ⚠️ Large files uploaded through the large-file API report `contentSha1` "none", so they are uploaded again once instead of adopted.
+- ⚠️ Path matching uses `filepath.Rel` (case-insensitive on Windows); Windows tests are compiled, not run (ADR-026) — run `go test ./...` on Windows before releasing this.

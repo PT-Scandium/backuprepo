@@ -326,7 +326,7 @@ func dispatchCommands(t *testing.T) []string {
 // store before checking the command line.
 func TestUsageErrorsCreateNoState(t *testing.T) {
 	for _, args := range [][]string{
-		{"watch"}, {"watch", "a", "b"}, {"unwatch"}, {"find"}, {"get"}, {"put"}, {"rm"},
+		{"watch"}, {"watch", "a", "b"}, {"watch", "--nope", "a"}, {"watch", "a", "--remote"}, {"watch", "--remote", "P"}, {"unwatch"}, {"find"}, {"get"}, {"put"}, {"rm"},
 		{"bucket", "a", "b", "c"}, {"appkey", "a", "b"}, {"backend", "s3", "b2"},
 		{"ls", "--nope"}, {"upload", "--nope"}, {"start", "--nope"}, {"rm", "-q", "x"},
 		{"service"}, {"service", "bogus"}, {"service", "install", "--nope"}, {"service", "status", "x"},
@@ -426,5 +426,28 @@ func TestBucketIDLookupWiring(t *testing.T) {
 	})
 	if strings.Join(bucketsArgs, ",") != "ListBuckets,FindBucket" {
 		t.Errorf("cli.Buckets is passed b2.%v; want ListBuckets then FindBucket", bucketsArgs)
+	}
+}
+
+// TestFlagSet: flagSet tells a flag given empty ("--remote=") from one left out,
+// so `bb watch dir --remote ""` is rejected as an empty prefix rather than
+// silently running a plain watch.
+func TestFlagSet(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"dir"}, false},
+		{[]string{"dir", "--remote", "P"}, true},
+		{[]string{"--remote=", "dir"}, true},
+	} {
+		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
+		fs.String("remote", "", "")
+		if _, err := parseFlags(fs, tc.args); err != nil {
+			t.Fatalf("parseFlags(%q): %v", tc.args, err)
+		}
+		if got := flagSet(fs, "remote"); got != tc.want {
+			t.Errorf("flagSet after %q = %v, want %v", tc.args, got, tc.want)
+		}
 	}
 }

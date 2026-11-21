@@ -289,7 +289,11 @@ func (s *Server) deletePath(ctx context.Context, path string) error {
 	// Delete the remote object first so a failure leaves the local file intact.
 	// Use the stored record's key and path when there is one: they carry the
 	// casing the file was backed up under.
-	key, recPath := backup.RemoteKey(path), path
+	folders, err := s.store.ListWatched(ctx)
+	if err != nil {
+		return err
+	}
+	key, recPath := backup.KeyFor(folders, path), path
 	if len(recs) > 0 {
 		key, recPath = recs[0].RemoteKey, recs[0].Path
 	}

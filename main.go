@@ -84,10 +84,20 @@ func run(args []string) int {
 	case "init":
 		act = func() error { return cli.Init(ctx, st, os.Stdin, os.Stdout, b2.FindBucket) }
 	case "watch":
-		if len(rest) != 1 {
-			return fail(fmt.Errorf("usage: bb watch /path/to/dir"))
+		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
+		remote := fs.String("remote", "", "store this folder's files under this bucket prefix")
+		pos, e := parseFlags(fs, rest)
+		if e != nil {
+			return 1
 		}
-		act = func() error { return cli.Watch(ctx, st, rest[0], os.Stdout) }
+		if len(pos) != 1 {
+			return fail(fmt.Errorf("usage: bb watch /path/to/dir [--remote PREFIX]"))
+		}
+		if flagSet(fs, "remote") {
+			act = func() error { return cli.WatchRemote(ctx, st, pos[0], *remote, os.Stdout) }
+		} else {
+			act = func() error { return cli.Watch(ctx, st, pos[0], os.Stdout) }
+		}
 	case "unwatch":
 		if len(rest) != 1 {
 			return fail(fmt.Errorf("usage: bb unwatch /path/to/dir"))
@@ -539,7 +549,9 @@ SETUP
                                of shell history); pass a new keyID to rotate the whole pair
 
 BACKUP  (watch local folders, upload changed files)
-  watch <dir>                Add a folder to the watch list
+  watch <dir> [--remote P]   Add a folder to the watch list. --remote stores its files under bucket
+                               folder P (P/sub/file) instead of under their full local path; on a
+                               folder already watched it changes the prefix
   unwatch <dir>              Remove a folder from the watch list
   list                       List watched folders + tracked files (last-backup times)
   status                     Configured? backend, watched folders, pending uploads, daemon (+ service) state
@@ -600,6 +612,18 @@ EXAMPLES
 
 State: ~/backup_repo/ (backup.db, key).   Exit codes: 0 ok, 1 error (message on stderr).   Docs: README.md
 `)
+}
+
+// flagSet reports whether the flag name was given on the command line (even
+// with an empty value), as opposed to left at its default.
+func flagSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
 }
 
 // fail prints err to stderr and returns exit code 1.

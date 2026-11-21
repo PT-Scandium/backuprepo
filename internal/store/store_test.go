@@ -210,3 +210,70 @@ func TestOpenMigratesOldSchema(t *testing.T) {
 		t.Fatalf("GetBackend after migrate = %q, %v", b, err)
 	}
 }
+
+// TestWatchedFolderPrefix covers the per-folder bucket prefix (ADR-027): a plain
+// AddFolder has none, AddFolderWithPrefix stores one (and refuses a folder
+// already watched), SetFolderPrefix changes it, and only for watched folders.
+func TestWatchedFolderPrefix(t *testing.T) {
+	st, _ := openTest(t)
+	ctx := context.Background()
+	if err := st.AddFolder(ctx, "/data/plain"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddFolderWithPrefix(ctx, "/data/sewa", "SEWA/"); err != nil {
+		t.Fatalf("AddFolderWithPrefix: %v", err)
+	}
+	if err := st.AddFolderWithPrefix(ctx, "/data/sewa", "OTHER/"); !errors.Is(err, apperr.ErrStore) {
+		t.Errorf("AddFolderWithPrefix(duplicate) = %v, want ErrStore", err)
+	}
+	got, err := st.ListWatched(ctx)
+	want := []Folder{{"/data/plain", ""}, {"/data/sewa", "SEWA/"}}
+	if err != nil || len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("ListWatched = %+v, %v; want %+v", got, err, want)
+	}
+	if err := st.SetFolderPrefix(ctx, "/data/plain", "PLAIN/"); err != nil {
+		t.Fatalf("SetFolderPrefix: %v", err)
+	}
+	if got, _ := st.ListWatched(ctx); got[0].RemotePrefix != "PLAIN/" {
+		t.Errorf("prefix after SetFolderPrefix = %q", got[0].RemotePrefix)
+	}
+	if err := st.SetFolderPrefix(ctx, "/data/nope", "X/"); !errors.Is(err, apperr.ErrFolderNotWatched) {
+		t.Errorf("SetFolderPrefix(unwatched) = %v, want ErrFolderNotWatched", err)
+	}
+	if folders, _ := st.ListFolders(ctx); len(folders) != 2 {
+		t.Errorf("ListFolders = %q, want both paths", folders)
+	}
+}
+
+// TestOpenMigratesFolderPrefix: a folders table from before ADR-027 (no
+// remote_prefix column) gains the column on Open, and existing rows read back
+// with an empty prefix, so they keep their old object names.
+func TestOpenMigratesFolderPrefix(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE folders (path TEXT PRIMARY KEY, added_at INTEGER);
+		INSERT INTO folders (path, added_at) VALUES ('/old/docs', 1);`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	st, err := Open(ctx, path, key32())
+	if err != nil {
+		t.Fatalf("Open (migrate): %v", err)
+	}
+	defer st.Close()
+	got, err := st.ListWatched(ctx)
+	if err != nil || len(got) != 1 || got[0] != (Folder{Path: "/old/docs"}) {
+		t.Fatalf("ListWatched after migrate = %+v, %v", got, err)
+	}
+	// Re-opening a migrated DB must not try to add the column again.
+	st.Close()
+	if st2, err := Open(ctx, path, key32()); err != nil {
+		t.Fatalf("re-Open: %v", err)
+	} else {
+		st2.Close()
+	}
+}
