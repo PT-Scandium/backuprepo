@@ -1,0 +1,94 @@
+# GoCD pipeline for backuprepo: pipelines-as-code (yaml-config-plugin).
+# GoCD on andromeda (http://127.0.0.1:8153/go) is this project's only CI; it
+# replaced GitHub Actions on 2026-11-21 (ADR-026). Setup: deploy/gocd/README.md.
+#
+# Config repo (registered once, via the API): id backuprepo, plugin yaml.config.plugin,
+#   material git file:///var/lib/gocd-repos/backuprepo.git, branch master,
+#   pattern *.gocd.yaml, rule: allow refer pipeline_group backuprepo.
+# The mirror follows this clone's master through the post-commit, post-merge and
+# post-rewrite hooks (deploy/gocd/mirror-hook, installed into .git/hooks).
+#
+# backuprepo is not a Sentral application: it only shares the GoCD server and the
+# Linux agent (andromeda, user go). Own pipeline group, one material, no deploy
+# stage (releases stay manual, see CLAUDE.md "Releasing").
+#
+# Every check except go mod verify and the hook tests is a Makefile target, so
+# CI and a local run do the same thing.
+# There is no Windows agent: the Windows tests are compiled and linked here but
+# not run (accepted gap, ADR-026). No coverage threshold is enforced: the total
+# is printed, not gated.
+#
+# GoCD reads #{...} as a parameter in config values: the task scripts below
+# must not contain a literal hash (write it as two). A single one makes the
+# whole config repo fail to parse, silently.
+
+format_version: 10
+
+pipelines:
+  backuprepo:
+    group: backuprepo
+    label_template: "${COUNT}"
+    lock_behavior: unlockWhenFinished
+
+    materials:
+      source:
+        git: file:///var/lib/gocd-repos/backuprepo.git
+        branch: master
+        destination: backuprepo
+
+    stages:
+      - verify:
+          fetch_materials: true
+          clean_workspace: true
+          jobs:
+            build:
+              timeout: 20
+              tasks:
+                - exec:
+                    command: bash
+                    working_directory: backuprepo
+                    arguments:
+                      - -c
+                      - |
+                        set -euo pipefail
+                        echo "=== toolchain and modules ==="
+                        go version
+                        git log -1 --format='commit %H %s'
+                        go mod verify
+                        echo "=== lint: go vet on linux, windows, darwin + gofmt ==="
+                        make lint
+                        echo "=== mirror hook tests ==="
+                        bash deploy/gocd/mirror-hook_test.sh
+
+                - exec:
+                    command: bash
+                    working_directory: backuprepo
+                    arguments:
+                      - -c
+                      - |
+                        set -euo pipefail
+                        echo "=== tests with coverage (linux) ==="
+                        make coverage
+
+                - exec:
+                    command: bash
+                    working_directory: backuprepo
+                    arguments:
+                      - -c
+                      - |
+                        set -euo pipefail
+                        echo "=== windows test binaries: compiled and linked, not run (ADR-026) ==="
+                        make wintest
+                        ls wintest
+
+                - exec:
+                    command: bash
+                    working_directory: backuprepo
+                    arguments:
+                      - -c
+                      - |
+                        set -euo pipefail
+                        echo "=== release binaries, static and stripped (not published) ==="
+                        make build
+                        make build-windows
+                        sha256sum bb bb.exe

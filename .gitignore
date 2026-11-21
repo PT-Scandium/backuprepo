@@ -1,5 +1,7 @@
 /backuprepo
 /bb
+/bb.exe
+/wintest/
 dist/
 .codegraph/
 coverage.out

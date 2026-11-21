@@ -355,7 +355,7 @@ Two buttons at the bottom: **Upload changed files** (runs a backup now) and **Cl
 
 Feature-complete against the original spec; current release **v1.0.12**. Design notes live in `docs/superpowers/`, decisions in `docs/project_notes/decisions.md`. Status of the former follow-ups:
 
-- CI (`.github/workflows/ci.yml`) runs vet, the tests and a build on Linux and Windows for every push.
+- CI is a local GoCD pipeline (`.gocd/backuprepo.gocd.yaml`, see `deploy/gocd/README.md`): vet on Linux, Windows and macOS, the Linux tests with coverage, the Windows test binaries compiled (not run) and both release builds, for every commit on `master`.
 - The ~22 MB binary size and Windows per-directory case sensitivity are accepted as they are (see ADR-025 in `docs/project_notes/decisions.md`).
 
 ---
