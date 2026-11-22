@@ -559,3 +559,18 @@ func TestState(t *testing.T) {
 		t.Errorf("unsupported OS: State = %q, want empty", got)
 	}
 }
+
+// TestRestart restarts the unit through systemctl and wraps a failure.
+func TestRestart(t *testing.T) {
+	m, fr := newManager(t)
+	if err := m.Restart(context.Background()); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	if last := fr.calls[len(fr.calls)-1]; last != "systemctl --user restart backuprepo.service" {
+		t.Errorf("last call = %q", last)
+	}
+	fr.errs["--user restart backuprepo.service"] = errors.New("unit failed")
+	if err := m.Restart(context.Background()); !errors.Is(err, apperr.ErrService) {
+		t.Errorf("Restart failure = %v, want ErrService", err)
+	}
+}

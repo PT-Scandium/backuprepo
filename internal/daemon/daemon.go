@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -40,6 +41,8 @@ const FallbackInterval = 5 * time.Minute
 
 // Daemon watches configured folders and backs up changed files.
 type Daemon struct {
+	mu          sync.Mutex // one backup/sync pass at a time (event flushes and the ticker race otherwise)
+	syncFn      func(ctx context.Context, out io.Writer) error
 	store       *store.Store
 	svc         *backup.Service
 	interval    time.Duration // full-scan fallback period
@@ -58,6 +61,13 @@ func New(st *store.Store, up b2.Uploader) *Daemon {
 		quietWindow: 1 * time.Second,
 		maxDelay:    5 * time.Second,
 	}
+}
+
+// EnableSync makes every pass also run fn, which syncs the folders mapped to
+// the bucket (ADR-028): on each change event after the one-way backup, and on
+// the 5-minute scan, which is when remote changes are pulled.
+func (d *Daemon) EnableSync(fn func(ctx context.Context, out io.Writer) error) {
+	d.syncFn = fn
 }
 
 // EnableDeletions turns on deletion propagation: the daemon will remove remote
@@ -250,6 +260,15 @@ func (d *Daemon) debounce(ctx context.Context, events <-chan string, flush func(
 // to call frequently: unchanged files are skipped cheaply (size+mtime) before any
 // hashing or upload. Errors are reported, not fatal — the daemon keeps running.
 func (d *Daemon) flush(ctx context.Context, out io.Writer) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.syncFn != nil {
+		defer func() {
+			if err := d.syncFn(ctx, out); err != nil {
+				fmt.Fprintf(out, "sync: %v\n", err)
+			}
+		}()
+	}
 	res, err := d.svc.UploadChanged(ctx)
 	if err != nil {
 		fmt.Fprintf(out, "scan: uploaded %d, skipped %d, failed %d%s%s: %v\n",

@@ -205,10 +205,10 @@ func Watch(ctx context.Context, st *store.Store, path string, out io.Writer) err
 	if err != nil {
 		return err
 	}
-	own := keySpace(store.Folder{Path: abs})
+	own := backup.KeySpace(store.Folder{Path: abs})
 	for _, f := range watched {
-		if f.RemotePrefix == "" {
-			continue // plain folders never collide with each other
+		if f.RemotePrefix == "" || f.RemotePrefix == store.RootPrefix {
+			continue // plain folders never collide with each other; a whole-bucket mirror excludes them
 		}
 		if err := checkOverlap(own, f); err != nil {
 			return err
@@ -286,7 +286,7 @@ func warnEnclosing(ctx context.Context, st *store.Store, dir string, out io.Writ
 func printWatched(out io.Writer, watched []store.Folder) {
 	for _, f := range watched {
 		if f.RemotePrefix != "" {
-			fmt.Fprintf(out, "  %s -> %s\n", f.Path, f.RemotePrefix)
+			fmt.Fprintf(out, "  %s -> %s\n", f.Path, remoteLabel(f.RemotePrefix))
 		} else {
 			fmt.Fprintf(out, "  %s\n", f.Path)
 		}
@@ -364,21 +364,13 @@ func WatchRemote(ctx context.Context, st *store.Store, path, remote string, out 
 	return nil
 }
 
-// keySpace is the object-name prefix every file of folder f is stored under.
-func keySpace(f store.Folder) string {
-	if f.RemotePrefix != "" {
-		return f.RemotePrefix
-	}
-	return backup.RemoteKey(filepath.Clean(f.Path)) + "/"
-}
-
 // checkOverlap refuses names (a folder's key space) that contain, or lie
 // inside, the key space of another watched folder f with a bucket prefix, or
 // of any folder when names is itself a prefix: the two folders' objects would
 // overwrite each other. Two folders without a prefix never collide (their
 // names are their distinct absolute paths).
 func checkOverlap(names string, f store.Folder) error {
-	other := keySpace(f)
+	other := backup.KeySpace(f)
 	if strings.HasPrefix(names, other) || strings.HasPrefix(other, names) {
 		return fmt.Errorf("%w: %q overlaps the object names of watched folder %s (%s)",
 			apperr.ErrInvalidPrefix, names, f.Path, other)

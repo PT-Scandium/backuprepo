@@ -326,7 +326,8 @@ func dispatchCommands(t *testing.T) []string {
 // store before checking the command line.
 func TestUsageErrorsCreateNoState(t *testing.T) {
 	for _, args := range [][]string{
-		{"watch"}, {"watch", "a", "b"}, {"watch", "--nope", "a"}, {"watch", "a", "--remote"}, {"watch", "--remote", "P"}, {"unwatch"}, {"find"}, {"get"}, {"put"}, {"rm"},
+		{"watch"}, {"watch", "a", "b"}, {"watch", "--nope", "a"}, {"watch", "a", "--remote"}, {"watch", "--remote", "P"}, {"unwatch"},
+		{"mapto"}, {"mapto", "a", "b"}, {"unmap", "a", "b"}, {"maps", "x"}, {"sync", "x"}, {"sync", "--all", "--folder", "F"}, {"sync", "--nope"}, {"find"}, {"get"}, {"put"}, {"rm"},
 		{"bucket", "a", "b", "c"}, {"appkey", "a", "b"}, {"backend", "s3", "b2"},
 		{"ls", "--nope"}, {"upload", "--nope"}, {"start", "--nope"}, {"rm", "-q", "x"},
 		{"service"}, {"service", "bogus"}, {"service", "install", "--nope"}, {"service", "status", "x"},

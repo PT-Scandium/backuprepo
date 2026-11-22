@@ -240,12 +240,12 @@ func TestUploadReportsAdoptedFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("same"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddFolderWithPrefix(ctx, dir, "P/"); err != nil {
+	if err := st.AddFolder(ctx, dir); err != nil {
 		t.Fatal(err)
 	}
 	fake := b2.NewFake()
 	fake.ReportSHA1 = true
-	fake.Objects["P/a.txt"] = []byte("same")
+	fake.Objects[backup.RemoteKey(filepath.Join(dir, "a.txt"))] = []byte("same")
 	var out bytes.Buffer
 	if err := Upload(ctx, st, fake, false, &out); err != nil {
 		t.Fatalf("Upload: %v", err)
@@ -286,7 +286,8 @@ func TestPlainWatchRespectsPrefixedFolders(t *testing.T) {
 		if err := st.AddFolderWithPrefix(ctx, outer, "OUT/"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := backup.New(st, b2.NewFake()).UploadChanged(ctx); err != nil {
+		ts := int64(1) // as left by a sync of the mapped folder
+		if err := st.UpsertFile(ctx, store.FileRecord{Path: filepath.Join(inner, "a.txt"), LastBackup: &ts, RemoteKey: "OUT/sub/a.txt"}); err != nil {
 			t.Fatal(err)
 		}
 		var out bytes.Buffer
@@ -315,7 +316,7 @@ func TestUploadReportsFailedHashLookups(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddFolderWithPrefix(ctx, dir, "P/"); err != nil {
+	if err := st.AddFolder(ctx, dir); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer

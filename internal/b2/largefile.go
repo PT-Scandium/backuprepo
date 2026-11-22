@@ -11,8 +11,9 @@ import (
 	"backuprepo/internal/apperr"
 )
 
-// uploadLarge uploads key in parts via the B2 large-file API.
-func (b *B2Backend) uploadLarge(ctx context.Context, auth *b2Auth, key string, r io.Reader, size int64) error {
+// uploadLarge uploads key in parts via the B2 large-file API. A non-empty info
+// is sent as the file's fileInfo (e.g. src_last_modified_millis, see modTimeMeta).
+func (b *B2Backend) uploadLarge(ctx context.Context, auth *b2Auth, key string, r io.Reader, size int64, info map[string]string) error {
 	part := b.partSize
 	if part <= 0 {
 		part = b2SmallFileLimit
@@ -22,9 +23,13 @@ func (b *B2Backend) uploadLarge(ctx context.Context, auth *b2Auth, key string, r
 	var start struct {
 		FileID string `json:"fileId"`
 	}
-	if err := b.postJSON(ctx, auth, "b2_start_large_file", map[string]string{
+	body := map[string]any{
 		"bucketId": b.cfg.BucketID, "fileName": encodeFileName(key), "contentType": "b2/x-auto",
-	}, &start); err != nil {
+	}
+	if len(info) > 0 {
+		body["fileInfo"] = info
+	}
+	if err := b.postJSON(ctx, auth, "b2_start_large_file", body, &start); err != nil {
 		return fmt.Errorf("%w: start_large_file %s: %v", apperr.ErrUploadFailed, key, err)
 	}
 

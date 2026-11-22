@@ -148,12 +148,19 @@ const b2MaxUploadAttempts = 5
 // large-file API (see largefile.go). Transient upload failures are retried with a
 // fresh upload URL (see b2MaxUploadAttempts).
 func (b *B2Backend) Upload(ctx context.Context, key string, r io.Reader, size int64) error {
+	return b.UploadWithModTime(ctx, key, r, size, time.Time{})
+}
+
+// UploadWithModTime is Upload that also records modTime as the file info
+// src_last_modified_millis (see b2.ModTimeUploader); a zero modTime records nothing.
+func (b *B2Backend) UploadWithModTime(ctx context.Context, key string, r io.Reader, size int64, modTime time.Time) error {
 	auth, err := b.authorize(ctx)
 	if err != nil {
 		return err
 	}
+	info := modTimeMeta(modTime)
 	if size > b2SmallFileLimit {
-		return b.uploadLarge(ctx, auth, key, r, size)
+		return b.uploadLarge(ctx, auth, key, r, size, info)
 	}
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -180,6 +187,9 @@ func (b *B2Backend) Upload(ctx context.Context, key string, r io.Reader, size in
 		req.Header.Set("X-Bz-File-Name", encodeFileName(key))
 		req.Header.Set("Content-Type", "b2/x-auto")
 		req.Header.Set("X-Bz-Content-Sha1", sha)
+		for k, v := range info {
+			req.Header.Set("X-Bz-Info-"+k, v)
+		}
 	}
 	return b.uploadWithRetry(ctx, "upload "+key, getURL, setHeaders, data)
 }
@@ -539,10 +549,23 @@ func urlEncodeSegment(s string) string {
 	return b.String()
 }
 
+// srcModifiedInfoKey is the B2 file info key (and S3 x-amz-meta-* name) that
+// records a source file's modification time in Unix milliseconds.
+const srcModifiedInfoKey = "src_last_modified_millis"
+
+// modTimeMeta returns the file info recording modTime as the source file's
+// modification time, or nil for a zero modTime (nothing is recorded).
+func modTimeMeta(modTime time.Time) map[string]string {
+	if modTime.IsZero() {
+		return nil
+	}
+	return map[string]string{srcModifiedInfoKey: strconv.FormatInt(modTime.UnixMilli(), 10)}
+}
+
 // srcModified parses the src_last_modified_millis file info B2 tools record at
 // upload; zero when it is missing or malformed.
 func srcModified(info map[string]string) time.Time {
-	ms, err := strconv.ParseInt(info["src_last_modified_millis"], 10, 64)
+	ms, err := strconv.ParseInt(info[srcModifiedInfoKey], 10, 64)
 	if err != nil || ms <= 0 {
 		return time.Time{}
 	}

@@ -74,6 +74,16 @@ type ContentHasher interface {
 	RemoteSHA1(ctx context.Context, key string) (sha1 string, found bool, err error)
 }
 
+// ModTimeUploader is an optional Uploader capability: UploadWithModTime stores
+// key exactly like Upload and also records modTime as the object's source
+// modification time (B2 file info src_last_modified_millis; on the S3 API the
+// x-amz-meta-src_last_modified_millis header B2 maps to it), which listings
+// report back as ObjectInfo.SrcModified. A zero modTime records nothing. Sync
+// uses it so "newest wins" compares the files' own times (ADR-028).
+type ModTimeUploader interface {
+	UploadWithModTime(ctx context.Context, key string, r io.Reader, size int64, modTime time.Time) error
+}
+
 // Deleter removes a single object. Backend satisfies it; the backup flow uses it
 // only when deletion propagation is explicitly enabled (opt-in, destructive).
 type Deleter interface {

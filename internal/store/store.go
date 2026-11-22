@@ -39,6 +39,13 @@ type FileRecord struct {
 	SHA256     string
 	LastBackup *int64
 	RemoteKey  string
+	// Sync snapshot (ADR-028): the remote version this file last matched.
+	// RemoteFileID is B2's id of that version ("" when bb uploaded it and
+	// hasn't listed it since), RemoteSHA1 its content SHA-1, RemoteTime its
+	// time in Unix milliseconds. Plain backups leave them empty.
+	RemoteFileID string
+	RemoteSHA1   string
+	RemoteTime   int64
 }
 
 const schema = `
@@ -54,7 +61,8 @@ CREATE TABLE IF NOT EXISTS folders (
 );
 CREATE TABLE IF NOT EXISTS files (
   path TEXT PRIMARY KEY, size INTEGER, mod_time INTEGER,
-  sha256 TEXT, last_backup INTEGER, remote_key TEXT
+  sha256 TEXT, last_backup INTEGER, remote_key TEXT,
+  remote_file_id TEXT, remote_sha1 TEXT, remote_time INTEGER
 );`
 
 // Open opens (creating if needed) the SQLite DB at path and applies the schema.
@@ -73,6 +81,14 @@ func Open(ctx context.Context, path string, key []byte) (*Store, error) {
 	}
 	if err := addMissingColumns(ctx, db, "folders", []column{
 		{"remote_prefix", "ALTER TABLE folders ADD COLUMN remote_prefix TEXT NOT NULL DEFAULT ''"},
+	}); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := addMissingColumns(ctx, db, "files", []column{
+		{"remote_file_id", "ALTER TABLE files ADD COLUMN remote_file_id TEXT"},
+		{"remote_sha1", "ALTER TABLE files ADD COLUMN remote_sha1 TEXT"},
+		{"remote_time", "ALTER TABLE files ADD COLUMN remote_time INTEGER"},
 	}); err != nil {
 		db.Close()
 		return nil, err
@@ -327,6 +343,16 @@ type Folder struct {
 	RemotePrefix string
 }
 
+// RootPrefix is the RemotePrefix of a folder that mirrors the whole bucket
+// (`bb sync --all`): its files are stored under their path relative to the
+// folder, with no prefix (ADR-028).
+const RootPrefix = "/"
+
+// Synced reports whether f is mapped to a bucket folder (or the bucket root)
+// and so kept in two-way sync, rather than backed up one way under its
+// absolute path (ADR-028).
+func (f Folder) Synced() bool { return f.RemotePrefix != "" }
+
 // ListWatched returns the watched folders with their bucket prefixes, sorted
 // by path.
 func (s *Store) ListWatched(ctx context.Context) ([]Folder, error) {
@@ -364,8 +390,8 @@ func (s *Store) GetFile(ctx context.Context, path string) (*FileRecord, error) {
 	var r FileRecord
 	var lastBackup sql.NullInt64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT path, size, mod_time, sha256, last_backup, remote_key FROM files WHERE path=?`, path).
-		Scan(&r.Path, &r.Size, &r.ModTime, &r.SHA256, &lastBackup, &r.RemoteKey)
+		`SELECT path, size, mod_time, sha256, last_backup, remote_key, COALESCE(remote_file_id, ''), COALESCE(remote_sha1, ''), COALESCE(remote_time, 0) FROM files WHERE path=?`, path).
+		Scan(&r.Path, &r.Size, &r.ModTime, &r.SHA256, &lastBackup, &r.RemoteKey, &r.RemoteFileID, &r.RemoteSHA1, &r.RemoteTime)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -385,12 +411,15 @@ func (s *Store) UpsertFile(ctx context.Context, r FileRecord) error {
 		lastBackup = *r.LastBackup
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO files (path, size, mod_time, sha256, last_backup, remote_key)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO files (path, size, mod_time, sha256, last_backup, remote_key,
+		                   remote_file_id, remote_sha1, remote_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(path) DO UPDATE SET
 		  size=excluded.size, mod_time=excluded.mod_time, sha256=excluded.sha256,
-		  last_backup=excluded.last_backup, remote_key=excluded.remote_key`,
-		r.Path, r.Size, r.ModTime, r.SHA256, lastBackup, r.RemoteKey)
+		  last_backup=excluded.last_backup, remote_key=excluded.remote_key,
+		  remote_file_id=excluded.remote_file_id, remote_sha1=excluded.remote_sha1,
+		  remote_time=excluded.remote_time`,
+		r.Path, r.Size, r.ModTime, r.SHA256, lastBackup, r.RemoteKey, r.RemoteFileID, r.RemoteSHA1, r.RemoteTime)
 	if err != nil {
 		return fmt.Errorf("%w: upsert file: %v", apperr.ErrStore, err)
 	}
@@ -409,7 +438,7 @@ func (s *Store) RemoveFile(ctx context.Context, path string) error {
 // ListFiles returns all tracked file records sorted by path.
 func (s *Store) ListFiles(ctx context.Context) ([]FileRecord, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT path, size, mod_time, sha256, last_backup, remote_key FROM files ORDER BY path`)
+		`SELECT path, size, mod_time, sha256, last_backup, remote_key, COALESCE(remote_file_id, ''), COALESCE(remote_sha1, ''), COALESCE(remote_time, 0) FROM files ORDER BY path`)
 	if err != nil {
 		return nil, fmt.Errorf("%w: list files: %v", apperr.ErrStore, err)
 	}
@@ -418,7 +447,8 @@ func (s *Store) ListFiles(ctx context.Context) ([]FileRecord, error) {
 	for rows.Next() {
 		var r FileRecord
 		var lastBackup sql.NullInt64
-		if err := rows.Scan(&r.Path, &r.Size, &r.ModTime, &r.SHA256, &lastBackup, &r.RemoteKey); err != nil {
+		if err := rows.Scan(&r.Path, &r.Size, &r.ModTime, &r.SHA256, &lastBackup, &r.RemoteKey,
+			&r.RemoteFileID, &r.RemoteSHA1, &r.RemoteTime); err != nil {
 			return nil, fmt.Errorf("%w: scan file: %v", apperr.ErrStore, err)
 		}
 		if lastBackup.Valid {

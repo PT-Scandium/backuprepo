@@ -97,6 +97,15 @@ func (m *Manager) Supported() error {
 	return nil
 }
 
+// Restart restarts the unit (used after the watch list changes, since the
+// daemon reads it at startup).
+func (m *Manager) Restart(ctx context.Context) error {
+	if _, err := m.systemctl(ctx, "restart", UnitName); err != nil {
+		return fmt.Errorf("%w: restart %s: %v", apperr.ErrService, UnitName, err)
+	}
+	return nil
+}
+
 // Active reports whether the unit is currently running.
 func (m *Manager) Active(ctx context.Context) bool {
 	out, err := m.systemctl(ctx, "is-active", UnitName)

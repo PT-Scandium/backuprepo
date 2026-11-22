@@ -326,3 +326,17 @@ func TestDeleteUntrackedFileUsesFolderPrefix(t *testing.T) {
 		t.Errorf("local file should be deleted, stat err = %v", err)
 	}
 }
+
+// TestUploadButtonSyncsMappedFolders: the Upload button also runs the sync
+// hook (mapped folders, ADR-028).
+func TestUploadButtonSyncsMappedFolders(t *testing.T) {
+	s, _, _, dir := newTestServer(t)
+	calls := 0
+	s.SetSync(func(ctx context.Context) error { calls++; return nil })
+	if rec := do(s, "POST", "/upload", "path="+url.QueryEscape(dir)); rec.Code != http.StatusSeeOther {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if calls != 1 {
+		t.Errorf("sync hook called %d times, want 1", calls)
+	}
+}

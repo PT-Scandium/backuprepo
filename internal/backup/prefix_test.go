@@ -64,9 +64,10 @@ func TestKeyFor(t *testing.T) {
 	}
 }
 
-// TestUploadChangedUsesFolderPrefix: files in a prefixed folder are uploaded
-// under prefix + relative path, and the record stores that key.
-func TestUploadChangedUsesFolderPrefix(t *testing.T) {
+// TestUploadChangedLeavesSyncedFoldersToSync: a folder mapped to a bucket
+// folder is kept in two-way sync by package syncer, so the one-way uploader
+// never touches it (ADR-028) — not even a brand-new file.
+func TestUploadChangedLeavesSyncedFoldersToSync(t *testing.T) {
 	svc, st, fake := newSvc(t)
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -76,22 +77,19 @@ func TestUploadChangedUsesFolderPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := svc.UploadChanged(ctx)
-	if err != nil || res.Uploaded != 1 {
-		t.Fatalf("UploadChanged = %+v, %v; want 1 upload", res, err)
+	if err != nil || res.Uploaded != 0 || len(fake.Objects) != 0 {
+		t.Fatalf("UploadChanged = %+v, %v, objects %v; want nothing uploaded", res, err, keys(fake.Objects))
 	}
-	if string(fake.Objects["SEWA/2025/a.pdf"]) != "pdf" || len(fake.Objects) != 1 {
-		t.Fatalf("objects = %v, want only SEWA/2025/a.pdf", keys(fake.Objects))
-	}
-	if rec, _ := st.GetFile(ctx, filepath.Join(dir, "2025", "a.pdf")); rec == nil || rec.RemoteKey != "SEWA/2025/a.pdf" {
-		t.Errorf("record = %+v, want RemoteKey SEWA/2025/a.pdf", rec)
+	if n, err := svc.PendingCount(ctx); err != nil || n != 1 {
+		t.Errorf("PendingCount = %d, %v; want the synced folder's new file counted", n, err)
 	}
 }
 
-// TestNestedWatchedFoldersUploadEachFileOnce: with ~/Documents (no prefix) and
-// ~/Documents/SEWA (prefix) both watched, each file is uploaded exactly once
-// under its innermost folder's key, and a second run uploads nothing (no
-// flip-flopping between the two keys).
-func TestNestedWatchedFoldersUploadEachFileOnce(t *testing.T) {
+// TestNestedSyncedFolderIsSkippedByOuterBackup: with ~/Documents backed up one
+// way and ~/Documents/SEWA mapped (synced), the outer walk skips the inner
+// folder entirely: its files are neither uploaded under their absolute names
+// nor counted twice.
+func TestNestedSyncedFolderIsSkippedByOuterBackup(t *testing.T) {
 	svc, st, fake := newSvc(t)
 	ctx := context.Background()
 	docs := t.TempDir()
@@ -99,6 +97,7 @@ func TestNestedWatchedFoldersUploadEachFileOnce(t *testing.T) {
 	mkdirAll(t, sewa)
 	writeFile(t, filepath.Join(docs, "notes.md"), "n")
 	writeFile(t, filepath.Join(sewa, "a.pdf"), "a")
+	writeFile(t, filepath.Join(sewa, SyncTempPrefix+"x.tmp"), "half")
 	if err := st.AddFolder(ctx, docs); err != nil {
 		t.Fatal(err)
 	}
@@ -106,59 +105,37 @@ func TestNestedWatchedFoldersUploadEachFileOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := svc.UploadChanged(ctx)
-	if err != nil || res.Uploaded != 2 || res.Skipped != 0 {
-		t.Fatalf("first run = %+v, %v; want 2 uploads, 0 skipped (one visit per file)", res, err)
+	if err != nil || res.Uploaded != 1 || len(fake.Objects) != 1 {
+		t.Fatalf("UploadChanged = %+v, %v, objects %v; want only notes.md", res, err, keys(fake.Objects))
 	}
-	want := map[string]bool{"SEWA/a.pdf": true, RemoteKey(filepath.Join(docs, "notes.md")): true}
-	if len(fake.Objects) != 2 {
-		t.Fatalf("objects = %v, want %v", keys(fake.Objects), want)
+	if _, ok := fake.Objects[RemoteKey(filepath.Join(docs, "notes.md"))]; !ok {
+		t.Errorf("objects = %v, want notes.md under its absolute name", keys(fake.Objects))
 	}
-	for k := range want {
-		if _, ok := fake.Objects[k]; !ok {
-			t.Errorf("missing object %q (have %v)", k, keys(fake.Objects))
-		}
-	}
-	res, err = svc.UploadChanged(ctx)
-	if err != nil || res.Uploaded != 0 || res.Skipped != 2 {
-		t.Fatalf("second run = %+v, %v; want 0 uploads, 2 skipped", res, err)
-	}
-	if n, err := svc.PendingCount(ctx); err != nil || n != 0 {
-		t.Errorf("PendingCount = %d, %v; want 0", n, err)
+	if n, _ := svc.PendingCount(ctx); n != 1 {
+		t.Errorf("PendingCount = %d, want 1 (SEWA/a.pdf once; the sync temp file never)", n)
 	}
 }
 
-// TestPrefixChangeReuploadsUnderNewKey: once a folder's prefix changes, its
-// already backed-up files are uploaded again under the new key, then settle.
-func TestPrefixChangeReuploadsUnderNewKey(t *testing.T) {
-	svc, st, fake := newSvc(t)
-	ctx := context.Background()
-	dir := t.TempDir()
-	file := filepath.Join(dir, "a.txt")
-	writeFile(t, file, "x")
-	if err := st.AddFolder(ctx, dir); err != nil {
-		t.Fatal(err)
+// TestOwner: the innermost watched folder owns a path; nothing owns a path
+// outside every folder or a folder itself.
+func TestOwner(t *testing.T) {
+	docs := filepath.Join(t.TempDir(), "Documents")
+	sewa := filepath.Join(docs, "SEWA")
+	folders := []store.Folder{{Path: docs}, {Path: sewa, RemotePrefix: "SEWA/"}}
+	if f, ok := Owner(folders, filepath.Join(sewa, "a.pdf")); !ok || f.Path != sewa || !f.Synced() {
+		t.Errorf("Owner(SEWA/a.pdf) = %+v, %v", f, ok)
 	}
-	if _, err := svc.UploadChanged(ctx); err != nil {
-		t.Fatal(err)
+	if f, ok := Owner(folders, filepath.Join(docs, "n.md")); !ok || f.Path != docs || f.Synced() {
+		t.Errorf("Owner(n.md) = %+v, %v", f, ok)
 	}
-	if err := st.SetFolderPrefix(ctx, dir, "NEW/"); err != nil {
-		t.Fatal(err)
+	if _, ok := Owner(folders, filepath.Join(t.TempDir(), "x")); ok {
+		t.Error("a path outside every folder has no owner")
 	}
-	if n, _ := svc.PendingCount(ctx); n != 1 {
-		t.Errorf("PendingCount after prefix change = %d, want 1", n)
+	if f, ok := Owner(folders, sewa+"X"); !ok || f.Path != docs {
+		t.Errorf("Owner(SEWAX) = %+v, %v; a sibling sharing a name prefix belongs to the outer folder", f, ok)
 	}
-	res, err := svc.UploadChanged(ctx)
-	if err != nil || res.Uploaded != 1 {
-		t.Fatalf("after prefix change = %+v, %v; want 1 upload", res, err)
-	}
-	if _, ok := fake.Objects["NEW/a.txt"]; !ok {
-		t.Fatalf("objects = %v, want NEW/a.txt", keys(fake.Objects))
-	}
-	if _, ok := fake.Objects[RemoteKey(file)]; !ok {
-		t.Error("the object under the old name must be kept")
-	}
-	if res, _ := svc.UploadChanged(ctx); res.Uploaded != 0 {
-		t.Errorf("third run uploaded %d, want 0", res.Uploaded)
+	if got := KeyFor([]store.Folder{{Path: docs, RemotePrefix: store.RootPrefix}}, filepath.Join(sewa, "a.pdf")); got != "SEWA/a.pdf" {
+		t.Errorf("KeyFor under a bucket-root folder = %q, want SEWA/a.pdf", got)
 	}
 }
 
@@ -207,8 +184,8 @@ func TestAdoptIdenticalRemoteObject(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "a.pdf")
 	writeFile(t, file, "contract")
-	fake.Objects["SEWA/a.pdf"] = []byte("contract")
-	if err := st.AddFolderWithPrefix(ctx, dir, "SEWA/"); err != nil {
+	fake.Objects[RemoteKey(file)] = []byte("contract")
+	if err := st.AddFolder(ctx, dir); err != nil {
 		t.Fatal(err)
 	}
 	fake.FailUpload = func(key string) error { return errors.New("must not upload " + key) }
@@ -217,8 +194,8 @@ func TestAdoptIdenticalRemoteObject(t *testing.T) {
 		t.Fatalf("UploadChanged = %+v, %v; want 1 adopted, 0 uploaded", res, err)
 	}
 	rec, _ := st.GetFile(ctx, file)
-	if rec == nil || rec.LastBackup == nil || rec.RemoteKey != "SEWA/a.pdf" {
-		t.Fatalf("record = %+v, want backed up under SEWA/a.pdf", rec)
+	if rec == nil || rec.LastBackup == nil || rec.RemoteKey != RemoteKey(file) {
+		t.Fatalf("record = %+v, want backed up under its name", rec)
 	}
 	if res, err := svc.UploadChanged(ctx); err != nil || res.Skipped != 1 || res.Adopted != 0 {
 		t.Errorf("second run = %+v, %v; want 1 skipped", res, err)
@@ -228,35 +205,37 @@ func TestAdoptIdenticalRemoteObject(t *testing.T) {
 // TestAdoptFallsBackToUpload: whenever adopting can't prove the bucket holds
 // the same bytes, the file is uploaded — different content, a hash B2 can't
 // compare ("none" for large files), a backend without the capability, or a
-// failed hash lookup.
+// failed hash lookup (counted).
 func TestAdoptFallsBackToUpload(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		setup func(f *b2.FakeBackend)
+		setup func(f *b2.FakeBackend, key string)
 		up    func(f *b2.FakeBackend) b2.Uploader
 	}{
-		{"different content", func(f *b2.FakeBackend) { f.ReportSHA1 = true; f.Objects["P/a.txt"] = []byte("old") }, nil},
-		{"large-file sha none", func(f *b2.FakeBackend) {
+		{"different content", func(f *b2.FakeBackend, key string) { f.ReportSHA1 = true; f.Objects[key] = []byte("old") }, nil},
+		{"large-file sha none", func(f *b2.FakeBackend, key string) {
 			f.ReportSHA1 = true
-			f.Objects["P/a.txt"] = []byte("new")
-			f.SHA1Override = map[string]string{"P/a.txt": "none"}
+			f.Objects[key] = []byte("new")
+			f.SHA1Override = map[string]string{key: "none"}
 		}, nil},
-		{"backend without hashes", func(f *b2.FakeBackend) { f.Objects["P/a.txt"] = []byte("new") }, nil},
-		{"hash lookup fails", func(f *b2.FakeBackend) { f.Objects["P/a.txt"] = []byte("new") },
+		{"backend without hashes", func(f *b2.FakeBackend, key string) { f.Objects[key] = []byte("new") }, nil},
+		{"hash lookup fails", func(f *b2.FakeBackend, key string) { f.Objects[key] = []byte("new") },
 			func(f *b2.FakeBackend) b2.Uploader { return failingHasher{f} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, st, fake := newSvc(t)
-			tc.setup(fake)
+			ctx := context.Background()
+			dir := t.TempDir()
+			file := filepath.Join(dir, "a.txt")
+			key := RemoteKey(file)
+			writeFile(t, file, "new")
+			tc.setup(fake, key)
 			var up b2.Uploader = fake
 			if tc.up != nil {
 				up = tc.up(fake)
 			}
 			svc := New(st, up)
-			ctx := context.Background()
-			dir := t.TempDir()
-			writeFile(t, filepath.Join(dir, "a.txt"), "new")
-			if err := st.AddFolderWithPrefix(ctx, dir, "P/"); err != nil {
+			if err := st.AddFolder(ctx, dir); err != nil {
 				t.Fatal(err)
 			}
 			res, err := svc.UploadChanged(ctx)
@@ -266,8 +245,8 @@ func TestAdoptFallsBackToUpload(t *testing.T) {
 			if wantFail := tc.name == "hash lookup fails"; (res.HashLookupsFailed == 1) != wantFail {
 				t.Errorf("HashLookupsFailed = %d, want %v", res.HashLookupsFailed, wantFail)
 			}
-			if string(fake.Objects["P/a.txt"]) != "new" {
-				t.Errorf("remote = %q, want the new content", fake.Objects["P/a.txt"])
+			if string(fake.Objects[key]) != "new" {
+				t.Errorf("remote = %q, want the new content", fake.Objects[key])
 			}
 		})
 	}
@@ -281,7 +260,7 @@ func TestChangedFileIsNotAdopted(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "a.txt")
 	writeFile(t, file, "v1")
-	if err := st.AddFolderWithPrefix(ctx, dir, "P/"); err != nil {
+	if err := st.AddFolder(ctx, dir); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.UploadChanged(ctx); err != nil {
@@ -290,7 +269,7 @@ func TestChangedFileIsNotAdopted(t *testing.T) {
 	writeFile(t, file, "v2-longer")
 	// Even if the server claimed to hold the new bytes, an edit must upload.
 	fake.ReportSHA1 = true
-	fake.SHA1Override = map[string]string{"P/a.txt": sha1Hex("v2-longer")}
+	fake.SHA1Override = map[string]string{RemoteKey(file): sha1Hex("v2-longer")}
 	res, err := svc.UploadChanged(ctx)
 	if err != nil || res.Uploaded != 1 || res.Adopted != 0 {
 		t.Fatalf("UploadChanged = %+v, %v; want 1 upload", res, err)
@@ -314,54 +293,36 @@ func keys(m map[string][]byte) []string {
 }
 
 // TestUnkeyedRecordMatchesOnlyDefaultName: a record from before keys were
-// stored was backed up under the default name, so once its folder gets a
-// prefix the file must be uploaded under the prefixed name (not silently
-// treated as already there).
+// stored was backed up under the default name, so it counts as backed up only
+// under that name — never under a prefixed one.
 func TestUnkeyedRecordMatchesOnlyDefaultName(t *testing.T) {
-	svc, st, fake := newSvc(t)
-	ctx := context.Background()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.txt")
-	writeFile(t, path, "x")
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
 	ts := int64(1)
-	if err := st.UpsertFile(ctx, store.FileRecord{Path: path, Size: info.Size(), ModTime: info.ModTime().Unix(),
-		SHA256: "old", LastBackup: &ts}); err != nil {
-		t.Fatal(err)
+	rec := &store.FileRecord{Path: "/data/a.txt", LastBackup: &ts}
+	if !backedUpUnder(rec, RemoteKey("/data/a.txt")) {
+		t.Error("an unkeyed record must match its default name")
 	}
-	if err := st.AddFolderWithPrefix(ctx, dir, "P/"); err != nil {
-		t.Fatal(err)
+	if backedUpUnder(rec, "P/a.txt") {
+		t.Error("an unkeyed record must not match a prefixed name")
 	}
-	res, err := svc.UploadChanged(ctx)
-	if err != nil || res.Uploaded != 1 {
-		t.Fatalf("UploadChanged = %+v, %v; want 1 upload", res, err)
-	}
-	if _, ok := fake.Objects["P/a.txt"]; !ok {
-		t.Errorf("objects = %v, want P/a.txt", keys(fake.Objects))
+	if backedUpUnder(&store.FileRecord{Path: "/data/a.txt", RemoteKey: "P/a.txt"}, "P/a.txt") {
+		t.Error("a record never backed up (no LastBackup) is not backed up")
 	}
 }
 
-// TestAdoptAfterPrefixChange: when a folder's prefix changes and the bucket
-// already holds the files under the new names, they are adopted, not uploaded.
-func TestAdoptAfterPrefixChange(t *testing.T) {
+// TestAdoptPlainFileAfterRecordLoss: a plain-folder file whose record is gone
+// (e.g. a fresh database) but whose exact bytes are already in the bucket
+// under its name is adopted, not uploaded again.
+func TestAdoptPlainFileAfterRecordLoss(t *testing.T) {
 	svc, st, fake := newSvc(t)
 	ctx := context.Background()
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "a.txt"), "same")
+	file := filepath.Join(dir, "a.txt")
+	writeFile(t, file, "same")
 	if err := st.AddFolder(ctx, dir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.UploadChanged(ctx); err != nil {
-		t.Fatal(err)
-	}
 	fake.ReportSHA1 = true
-	fake.Objects["NEW/a.txt"] = []byte("same")
-	if err := st.SetFolderPrefix(ctx, dir, "NEW/"); err != nil {
-		t.Fatal(err)
-	}
+	fake.Objects[RemoteKey(file)] = []byte("same")
 	fake.FailUpload = func(key string) error { return errors.New("must not upload " + key) }
 	res, err := svc.UploadChanged(ctx)
 	if err != nil || res.Adopted != 1 || res.Uploaded != 0 {
@@ -370,8 +331,8 @@ func TestAdoptAfterPrefixChange(t *testing.T) {
 }
 
 // TestLegacyRelativeOuterFolderSkipsAbsoluteInner: an outer folder stored as a
-// relative path (older bb) still skips an absolutely-stored nested folder, so
-// its files are uploaded once, under the inner prefix.
+// relative path (older bb) still skips an absolutely-stored nested synced
+// folder, so its files are not uploaded under the outer folder's names.
 func TestLegacyRelativeOuterFolderSkipsAbsoluteInner(t *testing.T) {
 	svc, st, fake := newSvc(t)
 	ctx := context.Background()
@@ -387,10 +348,42 @@ func TestLegacyRelativeOuterFolderSkipsAbsoluteInner(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := svc.UploadChanged(ctx)
-	if err != nil || res.Uploaded != 1 || len(fake.Objects) != 1 {
-		t.Fatalf("UploadChanged = %+v, %v, objects %v; want one upload", res, err, keys(fake.Objects))
+	if err != nil || res.Uploaded != 0 || len(fake.Objects) != 0 {
+		t.Fatalf("UploadChanged = %+v, %v, objects %v; want nothing (inner folder is synced)", res, err, keys(fake.Objects))
 	}
-	if _, ok := fake.Objects["SEWA/a.pdf"]; !ok {
-		t.Errorf("objects = %v, want SEWA/a.pdf", keys(fake.Objects))
+}
+
+// TestDeletePropagationSparesMappedFolders: `upload --delete` never deletes
+// anything for a mapped (two-way synced) folder — not for a mapped folder of
+// its own, nor one nested in a one-way folder (ADR-028: sync never deletes).
+func TestDeletePropagationSparesMappedFolders(t *testing.T) {
+	_, st, fake := newSvc(t)
+	svc := New(st, fake).WithDeleter(fake)
+	ctx := context.Background()
+	docs := t.TempDir()
+	sewa := filepath.Join(docs, "SEWA")
+	mkdirAll(t, sewa)
+	if err := st.AddFolder(ctx, docs); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddFolderWithPrefix(ctx, sewa, "SEWA/"); err != nil {
+		t.Fatal(err)
+	}
+	ts := int64(1)
+	for _, rec := range []store.FileRecord{
+		{Path: filepath.Join(sewa, "gone.pdf"), LastBackup: &ts, RemoteKey: "SEWA/gone.pdf"},
+		{Path: filepath.Join(docs, "gone.md"), LastBackup: &ts, RemoteKey: RemoteKey(filepath.Join(docs, "gone.md"))},
+	} {
+		fake.Objects[rec.RemoteKey] = []byte("x")
+		if err := st.UpsertFile(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := svc.UploadChanged(ctx)
+	if err != nil || res.Deleted != 1 {
+		t.Fatalf("UploadChanged = %+v, %v; want only the one-way folder's file deleted", res, err)
+	}
+	if _, ok := fake.Objects["SEWA/gone.pdf"]; !ok {
+		t.Error("the mapped folder's object was deleted")
 	}
 }

@@ -24,5 +24,6 @@ var (
 	ErrDaemon             = errors.New("bb: daemon error")
 	ErrService            = errors.New("bb: service error")
 	ErrInvalidPrefix      = errors.New("bb: invalid bucket prefix")
+	ErrSync               = errors.New("bb: sync failed")
 	ErrNoInput            = errors.New("bb: input ended before setup was complete (run `bb init` in an interactive terminal)")
 )

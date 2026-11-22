@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -48,18 +49,31 @@ func newS3Backend(ctx context.Context, cfg Config) (*S3Backend, error) {
 
 // Upload stores key, using S3 multipart upload for large files via the manager.
 func (u *S3Backend) Upload(ctx context.Context, key string, r io.Reader, size int64) error {
+	return u.UploadWithModTime(ctx, key, r, size, time.Time{})
+}
+
+// UploadWithModTime is Upload that also records modTime as the object metadata
+// src_last_modified_millis (sent as x-amz-meta-*, which B2 stores as file info;
+// see b2.ModTimeUploader). A zero modTime records nothing.
+func (u *S3Backend) UploadWithModTime(ctx context.Context, key string, r io.Reader, size int64, modTime time.Time) error {
 	uploader := manager.NewUploader(u.client, func(m *manager.Uploader) {
 		m.PartSize = multipartPartSize
 	})
-	_, err := uploader.Upload(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(u.bucket),
-		Key:    aws.String(key),
-		Body:   r,
-	})
+	_, err := uploader.Upload(ctx, s3PutInput(u.bucket, key, r, modTime))
 	if err != nil {
 		return fmt.Errorf("%w: put %s: %v", apperr.ErrUploadFailed, key, err)
 	}
 	return nil
+}
+
+// s3PutInput builds the PutObject request for Upload/UploadWithModTime.
+func s3PutInput(bucket, key string, r io.Reader, modTime time.Time) *s3.PutObjectInput {
+	return &s3.PutObjectInput{
+		Bucket:   aws.String(bucket),
+		Key:      aws.String(key),
+		Body:     r,
+		Metadata: modTimeMeta(modTime),
+	}
 }
 
 // Exists reports whether key is present via a HeadObject call.

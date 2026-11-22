@@ -20,6 +20,7 @@ import (
 	"backuprepo/internal/b2"
 	"backuprepo/internal/cli"
 	"backuprepo/internal/config"
+	"backuprepo/internal/daemon"
 	"backuprepo/internal/service"
 	"backuprepo/internal/store"
 )
@@ -94,7 +95,9 @@ func run(args []string) int {
 			return fail(fmt.Errorf("usage: bb watch /path/to/dir [--remote PREFIX]"))
 		}
 		if flagSet(fs, "remote") {
-			act = func() error { return cli.WatchRemote(ctx, st, pos[0], *remote, os.Stdout) }
+			// The explicit-path form of `bb mapto`: same guards (b2 backend, no
+			// re-mapping, never the state folder), same bucket-folder creation.
+			act = func() error { return runMapTo(ctx, st, cfg, pos[0], *remote) }
 		} else {
 			act = func() error { return cli.Watch(ctx, st, pos[0], os.Stdout) }
 		}
@@ -115,7 +118,7 @@ func run(args []string) int {
 		if _, e := parseFlags(fs, rest); e != nil {
 			return 1
 		}
-		act = func() error { return runUpload(ctx, st, *del) }
+		act = func() error { return runUpload(ctx, st, cfg, *del) }
 	case "ls":
 		fs := flag.NewFlagSet("ls", flag.ContinueOnError)
 		recursive := fs.Bool("r", false, "recursive")
@@ -259,8 +262,64 @@ func run(args []string) int {
 		act = func() error { return runStart(ctx, st, cfg, *del) }
 	case "stop":
 		act = func() error { return cli.Stop(ctx, cfg.Dir, os.Stdout) }
+	case "mapto":
+		if len(rest) != 1 {
+			return fail(fmt.Errorf("usage: bb mapto <bucket-folder>   (maps the current folder)"))
+		}
+		act = func() error {
+			dir, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			return runMapTo(ctx, st, cfg, dir, rest[0])
+		}
+	case "unmap":
+		if len(rest) > 1 {
+			return fail(fmt.Errorf("usage: bb unmap [dir]   (default: the current folder)"))
+		}
+		act = func() error {
+			dir := ""
+			if len(rest) == 1 {
+				dir = rest[0]
+			} else if wd, err := os.Getwd(); err == nil {
+				dir = wd
+			} else {
+				return err
+			}
+			if err := cli.Unmap(ctx, st, dir, os.Stdout); err != nil {
+				return err
+			}
+			restartService(ctx)
+			return nil
+		}
+	case "maps":
+		if len(rest) != 0 {
+			return fail(fmt.Errorf("usage: bb maps"))
+		}
+		act = func() error { return cli.Maps(ctx, st, os.Stdout) }
+	case "sync":
+		fs := flag.NewFlagSet("sync", flag.ContinueOnError)
+		all := fs.Bool("all", false, "mirror the whole bucket in the current folder")
+		folder := fs.String("folder", "", "sync the current folder with this bucket folder")
+		dry := fs.Bool("dry-run", false, "show what would be done without changing anything")
+		refill := fs.Bool("refill", false, "allow downloading into a mapped folder whose synced files are all missing")
+		pos, e := parseFlags(fs, rest)
+		if e != nil {
+			return 1
+		}
+		if len(pos) != 0 || (*all && flagSet(fs, "folder")) {
+			return fail(fmt.Errorf("usage: bb sync [--all | --folder <bucket-folder>] [--dry-run] [--refill]"))
+		}
+		opt := cli.SyncOptions{Mode: cli.ModeMapped, DryRun: *dry, Refill: *refill}
+		switch {
+		case *all:
+			opt.Mode = cli.ModeWholeBucket
+		case flagSet(fs, "folder"):
+			opt.Mode, opt.Folder = cli.ModeFolder, *folder
+		}
+		act = func() error { return runSync(ctx, st, cfg, opt) }
 	case "serve":
-		act = func() error { return runServe(ctx, st) }
+		act = func() error { return runServe(ctx, st, cfg) }
 	case "service":
 		opts, e := parseServiceArgs(rest)
 		if errors.Is(e, errFlagsReported) {
@@ -299,7 +358,7 @@ func isCommand(name string) bool {
 	switch name {
 	case "init", "watch", "unwatch", "list", "status", "config", "upload",
 		"ls", "find", "get", "put", "rm", "backend", "bucket", "buckets",
-		"appkey", "start", "stop", "serve", "service":
+		"appkey", "start", "stop", "serve", "service", "mapto", "unmap", "maps", "sync":
 		return true
 	}
 	return false
@@ -371,31 +430,85 @@ func argAt(pos []string, i int) string {
 }
 
 // runUpload builds the effective backend and uploads all changed files.
-func runUpload(ctx context.Context, st *store.Store, deleteRemoved bool) error {
-	be, err := buildBackend(ctx, st, "")
+func runUpload(ctx context.Context, st *store.Store, cfg *config.Config, deleteRemoved bool) error {
+	kind, be, err := buildBackendKind(ctx, st, "")
 	if err != nil {
 		return err
 	}
-	return cli.Upload(ctx, st, be, deleteRemoved, os.Stdout)
+	upErr := cli.Upload(ctx, st, be, deleteRemoved, os.Stdout)
+	syncErr := cli.SyncMapped(ctx, st, be, kind, cfg.Dir, os.Stdout)
+	return errors.Join(upErr, syncErr)
+}
+
+// buildBackendKind is buildBackend that also returns the effective kind.
+func buildBackendKind(ctx context.Context, st *store.Store, override string) (string, b2.Backend, error) {
+	kind, err := effectiveBackend(ctx, st, override)
+	if err != nil {
+		return "", nil, err
+	}
+	be, err := buildBackend(ctx, st, kind)
+	return kind, be, err
+}
+
+// runMapTo maps dir to a bucket folder. It deliberately leaves a running
+// service alone so the user can preview the first sync (`bb sync --dry-run`)
+// before the daemon performs it; MapTo prints the restart command.
+func runMapTo(ctx context.Context, st *store.Store, cfg *config.Config, dir, remote string) error {
+	kind, be, err := buildBackendKind(ctx, st, "")
+	if err != nil {
+		return err
+	}
+	return cli.MapTo(ctx, st, be, kind, cfg.Dir, dir, remote, os.Stdout)
+}
+
+// restartService restarts the systemd user service when it is running (Linux),
+// telling the user; anywhere else it reminds them to restart a daemon.
+func restartService(ctx context.Context) {
+	if runtime.GOOS == "linux" {
+		if mgr, err := service.NewManager(); err == nil && mgr.Active(ctx) {
+			if err := mgr.Restart(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: %v (restart it with `systemctl --user restart backuprepo`)\n", err)
+				return
+			}
+			fmt.Println("Restarted the backuprepo service so it uses the new mapping.")
+			return
+		}
+	}
+	fmt.Println("If a daemon (`bb start`) is running, restart it to use the new mapping.")
+}
+
+// runSync builds the backend and runs `bb sync` in the current directory.
+func runSync(ctx context.Context, st *store.Store, cfg *config.Config, opt cli.SyncOptions) error {
+	kind, be, err := buildBackendKind(ctx, st, "")
+	if err != nil {
+		return err
+	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	_, running := daemon.RunningPID(cfg.Dir)
+	opt.Dir, opt.Backend, opt.StateDir, opt.DaemonRunning = dir, kind, cfg.Dir, running
+	return cli.Sync(ctx, st, be, opt, os.Stdout)
 }
 
 // runStart builds the effective backend and launches the watcher daemon, which
 // blocks until interrupted or stopped.
 func runStart(ctx context.Context, st *store.Store, cfg *config.Config, deleteRemoved bool) error {
-	be, err := buildBackend(ctx, st, "")
+	kind, be, err := buildBackendKind(ctx, st, "")
 	if err != nil {
 		return err
 	}
-	return cli.Start(ctx, st, be, deleteRemoved, cfg.Dir, os.Stdout)
+	return cli.Start(ctx, st, be, kind, deleteRemoved, cfg.Dir, os.Stdout)
 }
 
 // runServe builds the effective backend and launches the localhost web UI.
-func runServe(ctx context.Context, st *store.Store) error {
-	be, err := buildBackend(ctx, st, "")
+func runServe(ctx context.Context, st *store.Store, cfg *config.Config) error {
+	kind, be, err := buildBackendKind(ctx, st, "")
 	if err != nil {
 		return err
 	}
-	return cli.Serve(ctx, st, be, os.Stdout)
+	return cli.Serve(ctx, st, be, kind, cfg.Dir, os.Stdout)
 }
 
 // serviceProbe is the `bb status` service probe: the systemd user unit's state
@@ -549,14 +662,27 @@ SETUP
                                of shell history); pass a new keyID to rotate the whole pair
 
 BACKUP  (watch local folders, upload changed files)
-  watch <dir> [--remote P]   Add a folder to the watch list. --remote stores its files under bucket
-                               folder P (P/sub/file) instead of under their full local path; on a
-                               folder already watched it changes the prefix
+  watch <dir> [--remote P]   Add a folder to the watch list. --remote P maps it to bucket folder P/
+                               instead: two-way sync, exactly like running mapto P inside it
   unwatch <dir>              Remove a folder from the watch list
   list                       List watched folders + tracked files (last-backup times)
   status                     Configured? backend, watched folders, pending uploads, daemon (+ service) state
-  upload [--delete]          Upload all changed files now (no-op if nothing changed)
-                               --delete also removes remote objects whose local files were deleted
+  upload [--delete]          Upload all changed files now (no-op if nothing changed), then sync
+                               mapped folders; --delete also removes remote objects whose local
+                               files were deleted (one-way folders only)
+
+SYNC  (keep a folder and a bucket folder the same, both ways; native b2 backend)
+  mapto <bucket-folder>      Map the CURRENT folder to bucket folder <bucket-folder>/ (created if
+                               missing). Preview with sync --dry-run; the daemon then uploads its
+                               changes in real time and pulls remote changes every 5 minutes
+  unmap [dir]                Stop syncing a mapped folder (default: the current one); files stay
+  maps                       List mapped folders
+  sync [--all | --folder F] [--dry-run] [--refill]
+                             Two-way sync now: --all mirrors the WHOLE bucket in the current folder,
+                               --folder F maps the current folder to bucket folder F; neither: every
+                               mapped folder. Newer version wins; a losing local edit is moved to
+                               ~/backup_repo/conflicts; nothing is ever deleted. --dry-run previews;
+                               --refill allows refilling a folder whose synced files are all gone
 
 DAEMON  (background watcher: real-time fsnotify events + 5-min fallback scan)
   start [--delete]           Watch all folders and back up changes until stopped (foreground)

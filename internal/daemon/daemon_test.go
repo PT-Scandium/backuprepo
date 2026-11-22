@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"backuprepo/internal/apperr"
 	"backuprepo/internal/b2"
 	"backuprepo/internal/backup"
+	"backuprepo/internal/store"
 )
 
 // TestDebounceCoalescesBurst verifies a rapid burst of events triggers exactly
@@ -417,5 +419,30 @@ func TestLookupNote(t *testing.T) {
 	}
 	if got := lookupNote(2); got != " (hash lookup failed for 2, uploaded instead)" {
 		t.Errorf("lookupNote(2) = %q", got)
+	}
+}
+
+// TestFlushRunsSyncAfterBackup: with sync enabled, every pass runs it after the
+// one-way backup (under the pass lock) and reports its error without stopping.
+func TestFlushRunsSyncAfterBackup(t *testing.T) {
+	st, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "d.db"), make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	d := New(st, b2.NewFake())
+	calls := 0
+	d.EnableSync(func(ctx context.Context, out io.Writer) error {
+		if d.mu.TryLock() {
+			t.Error("sync ran outside the pass lock")
+			d.mu.Unlock()
+		}
+		calls++
+		return errors.New("bucket unreachable")
+	})
+	var out bytes.Buffer
+	d.flush(context.Background(), &out)
+	if calls != 1 || !strings.Contains(out.String(), "sync: bucket unreachable") {
+		t.Errorf("calls = %d, output %q", calls, out.String())
 	}
 }

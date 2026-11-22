@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -40,6 +41,7 @@ type Server struct {
 	username string // OS login user shown in the header
 	done     chan struct{}
 	once     sync.Once
+	syncFn   func(ctx context.Context) error // optional: sync mapped folders after Upload
 }
 
 // New builds a Server. location is a human label for the destination (bucket /
@@ -51,6 +53,9 @@ func New(st *store.Store, be b2.Backend, location string) *Server {
 	}
 	return &Server{store: st, be: be, location: location, username: name, done: make(chan struct{})}
 }
+
+// SetSync makes the Upload button also sync the mapped folders (ADR-028).
+func (s *Server) SetSync(fn func(ctx context.Context) error) { s.syncFn = fn }
 
 // Serve runs the UI until Ctrl-C, the Close button, or ctx cancellation, then
 // shuts down gracefully.
@@ -236,6 +241,13 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	// A per-file failure is reflected in the refreshed table (Last Backup
 	// unchanged); don't 500 the whole page over it.
 	_, _ = backup.New(s.store, s.be).UploadChanged(r.Context())
+	if s.syncFn != nil {
+		// Mapped folders (ADR-028): the report goes to the `bb serve` terminal;
+		// a failure is logged there too, and the table shows backup times.
+		if err := s.syncFn(r.Context()); err != nil {
+			log.Printf("sync: %v", err)
+		}
+	}
 	http.Redirect(w, r, redirectTarget(r), http.StatusSeeOther)
 }
 

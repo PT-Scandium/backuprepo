@@ -57,11 +57,13 @@ type Result struct {
 	Errors            []error
 }
 
-// UploadChanged scans every watched folder and uploads changed/new files.
-// A single file's failure is recorded but does not abort the run.
+// UploadChanged scans the one-way (plain) watched folders and uploads
+// changed/new files. Folders mapped to a bucket folder are kept in two-way sync
+// by package syncer instead, never by this blind upload (ADR-028). A single
+// file's failure is recorded but does not abort the run.
 func (s *Service) UploadChanged(ctx context.Context) (Result, error) {
 	var res Result
-	err := s.eachFile(ctx, func(path string, info fs.FileInfo, key string) error {
+	err := s.eachFile(ctx, plainOnly, func(path string, info fs.FileInfo, key string) error {
 		changed, hash, prior, err := s.isChanged(ctx, path, info, key)
 		if err != nil {
 			res.Failed++
@@ -108,10 +110,17 @@ func (s *Service) UploadChanged(ctx context.Context) (Result, error) {
 // files that no longer exist on disk but still live under a watched folder. It is
 // only invoked when a deleter is configured (WithDeleter).
 func (s *Service) propagateDeletions(ctx context.Context, res *Result) error {
-	folders, err := s.store.ListFolders(ctx)
+	watched, err := s.store.ListWatched(ctx)
 	if err != nil {
 		return err
 	}
+	var folders []string
+	for _, f := range watched {
+		if !f.Synced() {
+			folders = append(folders, f.Path)
+		}
+	}
+	// Synced folders never delete (ADR-028): their records are skipped below.
 	// Only consider folders that currently exist as directories. If a watched
 	// folder is missing (e.g. an unmounted drive), skip deletions under it rather
 	// than purging every backup it ever held — a transient mount failure must not
@@ -131,6 +140,9 @@ func (s *Service) propagateDeletions(ctx context.Context, res *Result) error {
 	}
 	for _, fr := range files {
 		if fr.RemoteKey == "" || !underAny(live, fr.Path) {
+			continue
+		}
+		if owner, ok := Owner(watched, fr.Path); ok && owner.Synced() {
 			continue
 		}
 		if _, statErr := os.Lstat(fr.Path); statErr == nil {
@@ -166,12 +178,17 @@ func underAny(folders []string, path string) bool {
 	return false
 }
 
-// PendingCount returns how many files would be uploaded by UploadChanged. A new
+// plainOnly selects the one-way backup folders (no bucket prefix).
+func plainOnly(f store.Folder) bool { return !f.Synced() }
+
+// PendingCount returns how many local files changed since their last backup or
+// sync, across all watched folders (for synced folders it counts only local
+// changes; remote ones show up at the next sync). A new
 // file the bucket already holds (adopted without an upload) is still counted:
 // telling the two apart needs a request to the server per file.
 func (s *Service) PendingCount(ctx context.Context) (int, error) {
 	n := 0
-	err := s.eachFile(ctx, func(path string, info fs.FileInfo, key string) error {
+	err := s.eachFile(ctx, func(store.Folder) bool { return true }, func(path string, info fs.FileInfo, key string) error {
 		changed, _, _, err := s.isChanged(ctx, path, info, key)
 		if err != nil {
 			return err
@@ -184,16 +201,19 @@ func (s *Service) PendingCount(ctx context.Context) (int, error) {
 	return n, err
 }
 
-// eachFile walks all watched folders and calls fn for each regular file with
-// the object key it is stored under (see KeyFor). A watched folder nested in
+// eachFile walks the watched folders include accepts and calls fn for each
+// regular file with the object key it is stored under (see KeyFor). A watched folder nested in
 // another is skipped by the outer walk and walked on its own, so each file is
 // visited once.
-func (s *Service) eachFile(ctx context.Context, fn func(path string, info fs.FileInfo, key string) error) error {
+func (s *Service) eachFile(ctx context.Context, include func(store.Folder) bool, fn func(path string, info fs.FileInfo, key string) error) error {
 	folders, err := s.store.ListWatched(ctx)
 	if err != nil {
 		return err
 	}
 	for _, folder := range folders {
+		if !include(folder) {
+			continue
+		}
 		root := filepath.Clean(folder.Path)
 		walkErr := filepath.WalkDir(folder.Path, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -205,7 +225,7 @@ func (s *Service) eachFile(ctx context.Context, fn func(path string, info fs.Fil
 				}
 				return nil
 			}
-			if !d.Type().IsRegular() {
+			if !d.Type().IsRegular() || IsSyncTemp(d.Name()) {
 				return nil
 			}
 			info, err := d.Info()
@@ -245,6 +265,7 @@ func (s *Service) isChanged(ctx context.Context, path string, info fs.FileInfo, 
 		_ = s.store.UpsertFile(ctx, store.FileRecord{
 			Path: path, Size: size, ModTime: mtime, SHA256: hash,
 			LastBackup: prior.LastBackup, RemoteKey: key,
+			RemoteFileID: prior.RemoteFileID, RemoteSHA1: prior.RemoteSHA1, RemoteTime: prior.RemoteTime,
 		})
 		return false, hash, prior, nil
 	}
@@ -326,8 +347,9 @@ func RemoteKey(path string) string {
 
 // KeyFor returns the object key for the file at path. The innermost watched
 // folder containing path decides: with a bucket prefix the key is that prefix
-// plus path relative to the folder (ADR-027); without one (or outside every
-// folder) it is RemoteKey(path), the name bb has always used.
+// plus path relative to the folder (ADR-027), for the bucket root just the
+// relative path (ADR-028); without one (or outside every folder) it is
+// RemoteKey(path), the name bb has always used.
 func KeyFor(folders []store.Folder, path string) string {
 	best, bestLen, rel := -1, -1, ""
 	for i, f := range folders {
@@ -340,11 +362,56 @@ func KeyFor(folders []store.Folder, path string) string {
 			best, bestLen, rel = i, len(root), r
 		}
 	}
-	if best < 0 || folders[best].RemotePrefix == "" {
+	switch {
+	case best < 0 || folders[best].RemotePrefix == "":
 		return RemoteKey(path)
+	case folders[best].RemotePrefix == store.RootPrefix:
+		return filepath.ToSlash(rel)
 	}
 	return folders[best].RemotePrefix + filepath.ToSlash(rel)
 }
+
+// KeySpace is the object-name prefix every file of folder f is stored under:
+// its bucket prefix, "" (everything) for a bucket-root folder, or its absolute
+// path's default name plus "/" for a one-way folder.
+func KeySpace(f store.Folder) string {
+	switch f.RemotePrefix {
+	case "":
+		return RemoteKey(filepath.Clean(f.Path)) + "/"
+	case store.RootPrefix:
+		return ""
+	}
+	return f.RemotePrefix
+}
+
+// Owner returns the innermost watched folder containing path, and false when
+// none does. Its RemotePrefix decides how the file is stored and whether it is
+// synced (Folder.Synced) or backed up one way.
+func Owner(folders []store.Folder, path string) (store.Folder, bool) {
+	best, bestLen := -1, -1
+	for i, f := range folders {
+		root := filepath.Clean(f.Path)
+		r, err := filepath.Rel(root, path)
+		if err != nil || r == "." || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if len(root) > bestLen {
+			best, bestLen = i, len(root)
+		}
+	}
+	if best < 0 {
+		return store.Folder{}, false
+	}
+	return folders[best], true
+}
+
+// IsSyncTemp reports whether name is a download in progress written by sync
+// (ADR-028); walks skip such files so a half-written download is never
+// uploaded.
+func IsSyncTemp(name string) bool { return strings.HasPrefix(name, SyncTempPrefix) }
+
+// SyncTempPrefix starts the name of every temporary file sync downloads into.
+const SyncTempPrefix = ".bb-sync-"
 
 // isWatchedRoot reports whether dir is itself one of the watched folders,
 // comparing absolute forms (so a legacy relative entry matches too) and
