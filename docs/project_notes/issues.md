@@ -293,6 +293,7 @@ Quick log of completed work. Brief entries; link to tickets/PRs where available.
   1. **Windows test run in a VM** (hard release gate, owner's decision 2026-11-23): `go test ./...` on a Windows VM; `internal/syncer/lock_windows.go` (`LockFileEx`) and the Windows `safeRel` rules have only been compiled (`make wintest`), never executed.
   2. Re-review the last unreviewed fix delta with quality-reviewer: `freeName` bound, refill-guard refinement, `watch --remote` → `MapTo`, S3 warn-once, usage tests.
   3. Merge to `master`, `make bump` (v1.0.13), wait for a passed GoCD `backuprepo` run on that exact commit, tag, GitHub release (linux + windows assets + `SHA256SUMS`), README links commit.
+  - 2026-11-23: andromeda runs a **local, unreleased build of `0eaaa0b`** in `~/.local/bin/bb` (sha256 `5a226ba4…`; `bb version` still prints 1.0.12); the old binary is kept at `~/.local/bin/bb-1.0.12`; service enabled but stopped.
   4. Install the checksum-verified asset to `~/.local/bin/bb` on andromeda (service stays stopped until then), then the owner's runbook: `~/SC-OFFICE` → `bb sync --all --dry-run` → `bb sync --all` → `bb sync --dry-run` ("nothing to do") → re-`put` the 8 stale Obsidian files → start the service.
   5. Owner: refine `localWins` (`internal/syncer/newest.go`) + a matching test row.
 
