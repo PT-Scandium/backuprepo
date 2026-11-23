@@ -261,11 +261,12 @@ bb rm photos/ -r -f                      # delete a whole prefix, skip confirmat
 Keep a local folder and a bucket folder the same in **both directions**. Needs the native backend (`bb backend b2`).
 
 ```sh
+systemctl --user stop backuprepo      # mapto and sync refuse while the daemon runs
 cd ~/Documents/Contracts
 bb mapto Contracts          # map THIS folder to bucket folder Contracts/ (created if it doesn't exist)
 bb sync --dry-run           # preview the first sync: what would be downloaded / uploaded
-bb sync                     # sync every mapped folder now (stop the daemon first)
-systemctl --user restart backuprepo   # then let the daemon keep it in sync
+bb sync                     # sync every mapped folder now
+systemctl --user start backuprepo     # then let the daemon keep it in sync
 bb maps                     # list mapped folders
 bb unmap                    # stop syncing this folder (files stay on both sides)
 
@@ -276,9 +277,9 @@ bb sync --folder Contracts  # map this folder to bucket folder Contracts/ and sy
 ```
 
 - **Rules:** a change on one side is copied to the other. If a file changed on **both** sides since the last sync, the **newer** version wins; when that's the remote one, your local version is moved to `~/backup_repo/conflicts/<date-time>/<folder>/…` (never thrown away, never overwritten). **Nothing is ever deleted:** a file missing on one side is restored from the other. To really delete a synced file, delete it on both sides (e.g. the web UI's trash can, `bb serve`, removes the local file and its backup together). **On a bucket with Object Lock retention, B2 refuses to delete locked versions:** `bb rm` and the web trash can then fail (the web UI keeps the local file, since it deletes the remote copy first), so a synced file can't be removed until its retention period ends.
-- **Automatic:** with the daemon running (`bb start` or `bb service install`), local changes in mapped folders sync seconds after you save, and remote changes (e.g. a colleague using the Backblaze web UI) come down on each **5-minute** scan. `bb upload` and the web UI's Upload button sync mapped folders too (the web UI prints the result in the `bb serve` terminal). Only one bb process syncs at a time (a lock in `~/backup_repo`); `bb sync` refuses while the daemon runs — stop it first, or use `--dry-run`. `bb mapto` does **not** restart the daemon, so you can preview first; `bb unmap` restarts a running service.
+- **Automatic:** with the daemon running (`bb start` or `bb service install`), local changes in mapped folders sync seconds after you save, and remote changes (e.g. a colleague using the Backblaze web UI) come down on each **5-minute** scan. `bb upload` and the web UI's Upload button sync mapped folders too (the web UI prints the result in the `bb serve` terminal). Only one bb process syncs at a time (a lock in `~/backup_repo`); `bb sync` refuses while the daemon runs — stop it first, or use `--dry-run`. **`bb mapto` (and `bb watch <dir> --remote P`) refuses while the daemon runs**: the daemon re-reads mapped folders on every pass and would sync the new folder before you could preview it. Stop it, map, preview, `bb sync`, then start it. `bb unmap` restarts a running service.
 - **One local copy per bucket folder:** two mapped folders can't share bucket objects, a whole-bucket mirror (`--all`) can't coexist with other mapped folders, a mapped folder isn't re-mapped in place (`bb unmap` it first: re-mapping would upload everything again under new names), and a folder containing `~/backup_repo` can't be mapped. Folders backed up one way (`bb watch`), and watched folders nested in a mapped one, are left out of it in both directions.
-- **Safety:** downloads go to a temporary `.bb-sync-*` file, are checked against the remote SHA-1, and replace the local file only if it didn't change meanwhile; a mapped folder that is missing (e.g. an unmounted drive) is skipped, never re-created; one where *every* previously synced file is missing (an empty mount point?) is refused until you run `bb sync --refill` in it; object names that would escape the folder (or that Windows can't store) are refused. Each run lists the bucket folder once (B2 class C call).
+- **Safety:** downloads go to a temporary `.bb-sync-*` file, are checked against the remote SHA-1, and replace the local file only if it didn't change meanwhile; a mapped folder that is missing (e.g. an unmounted drive) is skipped, never re-created; one where *every* previously synced file is missing (an empty mount point?) is refused until you stop the daemon and run `bb sync --refill` (which refills every emptied mapped folder); object names that would escape the folder (or that Windows can't store) are refused. Each run lists the bucket folder once (B2 class C call).
 - **Times:** files `bb` uploads carry their modification time (`src_last_modified_millis`, as rclone and the web UI also set); downloads get the remote file's time, so a fresh download never looks "newer". For older objects without it, the upload time is used.
 - `bb watch <dir> --remote P` is the explicit-path form of `bb mapto P`.
 

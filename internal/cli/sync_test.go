@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"backuprepo/internal/apperr"
 	"backuprepo/internal/b2"
+	"backuprepo/internal/daemon"
 	"backuprepo/internal/store"
 	"backuprepo/internal/syncer"
 )
@@ -222,7 +225,7 @@ func TestSyncMappedStep(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := SyncMapped(ctx, st, fake, "s3", t.TempDir(), &out); err != nil || !strings.Contains(out.String(), "warning: mapped folders are not synced") {
+	if err := SyncMapped(ctx, st, fake, "s3", t.TempDir(), &out); err != nil || !strings.Contains(out.String(), "warning: mapped folders are NOT backed up or synced") {
 		t.Errorf("s3: %q, %v", out.String(), err)
 	}
 	out.Reset()
@@ -293,5 +296,146 @@ func TestSyncHonoursLock(t *testing.T) {
 	unlock()
 	if err := SyncMapped(ctx, st, fake, "b2", state, &bytes.Buffer{}); err != nil || len(fake.Uploads) != 1 {
 		t.Errorf("after unlock: %v, uploads %v", err, fake.Uploads)
+	}
+}
+
+// lockedBuffer is a bytes.Buffer safe to write from the daemon's goroutines.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// startDaemon runs cli.Start in the background with its PID file in stateDir
+// and waits until the daemon is visible to RunningPID. The returned func stops
+// it and waits for Start to return.
+func startDaemon(t *testing.T, st *store.Store, be b2.Backend, kind, stateDir string, out io.Writer) func() {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Start(ctx, st, be, kind, false, stateDir, out) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := daemon.RunningPID(stateDir); ok {
+			break
+		}
+		select {
+		case err := <-done:
+			cancel()
+			t.Fatalf("daemon exited early: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatal("daemon did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("daemon did not stop")
+		}
+	}
+}
+
+// TestMapToRefusesWhileDaemonRuns: the daemon re-reads mapped folders on every
+// pass, so a mapping made while it runs would be synced (uploaded, permanently
+// under Object Lock) before the user could preview it. mapto must refuse and
+// store nothing; this covers `bb watch DIR --remote P` too (it runs MapTo).
+func TestMapToRefusesWhileDaemonRuns(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	state := t.TempDir()
+	plain := t.TempDir()
+	if err := st.AddFolder(ctx, plain); err != nil {
+		t.Fatal(err)
+	}
+	fake := b2.NewFake()
+	stop := startDaemon(t, st, fake, "b2", state, &lockedBuffer{})
+	defer stop()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "private.txt"), []byte("p"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := MapTo(ctx, st, fake, "b2", state, dir, "SHARED", &bytes.Buffer{})
+	if !errors.Is(err, apperr.ErrSync) || !strings.Contains(err.Error(), "daemon is running") {
+		t.Fatalf("MapTo with a running daemon = %v", err)
+	}
+	if got, _ := st.ListWatched(ctx); len(got) != 1 || got[0].Synced() {
+		t.Errorf("watch list = %+v, want only the plain folder", got)
+	}
+	if _, ok := fake.Objects["SHARED/"+syncer.FolderMarker]; ok {
+		t.Error("bucket folder created although mapto refused")
+	}
+}
+
+// TestMapToRefusesPlainWatchedFolder: a folder backed up one way can't be
+// mapped in place (its files would be re-keyed and uploaded again without a
+// preview); the user unwatches it first.
+func TestMapToRefusesPlainWatchedFolder(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	dir := t.TempDir()
+	if err := st.AddFolder(ctx, dir); err != nil {
+		t.Fatal(err)
+	}
+	err := MapTo(ctx, st, b2.NewFake(), "b2", t.TempDir(), dir, "A", &bytes.Buffer{})
+	if !errors.Is(err, apperr.ErrInvalidPrefix) || !strings.Contains(err.Error(), "bb unwatch") {
+		t.Fatalf("MapTo on a plain watched folder = %v", err)
+	}
+	if got, _ := st.ListWatched(ctx); len(got) != 1 || got[0].Synced() {
+		t.Errorf("watch list = %+v, want the folder still plain", got)
+	}
+}
+
+// failingList is a backend whose List fails.
+type failingList struct{ b2.Backend }
+
+func (failingList) List(context.Context, string, bool) (b2.Listing, error) {
+	return b2.Listing{}, errors.New("bucket unreachable")
+}
+
+// TestMapToListFailureStoresNothing: when the bucket can't be checked, mapto
+// fails without leaving a mapping behind (a running daemon would sync it).
+func TestMapToListFailureStoresNothing(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	err := MapTo(ctx, st, failingList{b2.NewFake()}, "b2", t.TempDir(), t.TempDir(), "A", &bytes.Buffer{})
+	if !errors.Is(err, apperr.ErrSync) {
+		t.Fatalf("MapTo with a failing List = %v", err)
+	}
+	if got, _ := st.ListWatched(ctx); len(got) != 0 {
+		t.Errorf("watch list = %+v, want empty", got)
+	}
+}
+
+// TestStartWarnsMappedFoldersOnS3: on the S3 backend mapped folders are
+// neither synced nor backed up one way; the daemon says so once at startup.
+func TestStartWarnsMappedFoldersOnS3(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	if err := st.AddFolderWithPrefix(ctx, t.TempDir(), "A/"); err != nil {
+		t.Fatal(err)
+	}
+	out := &lockedBuffer{}
+	stop := startDaemon(t, st, b2.NewFake(), "s3", t.TempDir(), out)
+	stop()
+	if n := strings.Count(out.String(), "mapped folders are NOT backed up or synced"); n != 1 {
+		t.Errorf("warning printed %d times; output:\n%s", n, out.String())
 	}
 }

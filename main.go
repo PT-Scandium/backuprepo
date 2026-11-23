@@ -450,9 +450,9 @@ func buildBackendKind(ctx context.Context, st *store.Store, override string) (st
 	return kind, be, err
 }
 
-// runMapTo maps dir to a bucket folder. It deliberately leaves a running
-// service alone so the user can preview the first sync (`bb sync --dry-run`)
-// before the daemon performs it; MapTo prints the restart command.
+// runMapTo maps dir to a bucket folder. MapTo refuses while the daemon runs,
+// so the user can preview the first sync (`bb sync --dry-run`) before anything
+// is uploaded.
 func runMapTo(ctx context.Context, st *store.Store, cfg *config.Config, dir, remote string) error {
 	kind, be, err := buildBackendKind(ctx, st, "")
 	if err != nil {

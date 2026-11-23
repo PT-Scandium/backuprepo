@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"backuprepo/internal/apperr"
 	"backuprepo/internal/b2"
@@ -281,4 +282,49 @@ func TestLockIsExclusive(t *testing.T) {
 		t.Fatalf("Lock after release: %v", err)
 	}
 	unlock2()
+}
+
+// freeNameWithin runs freeName with a deadline (a bad shortening loop would
+// otherwise hang the test, as it would hang the daemon).
+func freeNameWithin(t *testing.T, p string) (string, error) {
+	t.Helper()
+	type res struct {
+		s   string
+		err error
+	}
+	ch := make(chan res, 1)
+	go func() { s, err := freeName(p); ch <- res{s, err} }()
+	select {
+	case r := <-ch:
+		return r.s, r.err
+	case <-time.After(5 * time.Second):
+		t.Fatalf("freeName(%q) did not return", filepath.Base(p))
+		return "", nil
+	}
+}
+
+// TestFreeNameMultiByteAndLongExtension: shortening keeps whole runes (a
+// conflict copy of a Japanese or accented name stays valid UTF-8), and a very
+// long "extension" is treated as part of the name instead of being kept whole.
+func TestFreeNameMultiByteAndLongExtension(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{
+		strings.Repeat("あ", 84) + ".md",       // 255 bytes, 3-byte runes
+		"x" + strings.Repeat("é", 126) + ".x", // 255 bytes, 2-byte runes at an odd offset
+		"a." + strings.Repeat("e", 252),       // 254 bytes, 253-byte "extension"
+	} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Skipf("filesystem rejects a %d-byte name: %v", len(name), err)
+		}
+		got, err := freeNameWithin(t, p)
+		base := filepath.Base(got)
+		if err != nil || len(base) > 255 || !utf8.ValidString(base) || !strings.Contains(base, " (2)") {
+			t.Fatalf("freeName(%d-byte name) = %q (%d bytes, valid UTF-8 %v), %v",
+				len(name), base, len(base), utf8.ValidString(base), err)
+		}
+		if err := os.WriteFile(got, []byte("y"), 0o644); err != nil {
+			t.Fatalf("the shortened name can't be created: %v", err)
+		}
+	}
 }

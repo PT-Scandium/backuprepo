@@ -17,6 +17,7 @@ import (
 
 	"backuprepo/internal/apperr"
 	"backuprepo/internal/b2"
+	"backuprepo/internal/daemon"
 	"backuprepo/internal/store"
 	"backuprepo/internal/syncer"
 )
@@ -54,17 +55,30 @@ func syncOpts(dir string, dryRun, refill bool) syncer.Options {
 // lists each version's id and SHA-1, which sync's change detection relies on.
 var errNeedsB2 = fmt.Errorf("%w: two-way sync needs the native B2 backend (run `bb backend b2`)", apperr.ErrSync)
 
+// errDaemonMaps explains why mapto refuses while the daemon runs.
+var errDaemonMaps = fmt.Errorf("%w: the daemon is running and would sync a new mapping on its next pass, before you could preview it; "+
+	"stop it first (`systemctl --user stop backuprepo` or `bb stop`), map the folder, preview with `bb sync --dry-run`, "+
+	"run `bb sync`, then start the daemon again", apperr.ErrSync)
+
 // MapTo maps the directory dir (normally the current one) to the bucket folder
 // remote, so its files are kept in two-way sync with remote/ (ADR-028). An
 // empty bucket folder is made visible with a zero-byte remote/.bzEmpty, as the
 // Backblaze web UI does. Mapping rules are WatchRemote's plus planMapping's
 // (no second mapping next to a whole-bucket mirror, no remapping a mapped
-// folder, never the folder holding bb's state). It does not restart a running
-// daemon: the user previews the first sync, then restarts it (the daemon's
-// first pass would otherwise sync at once).
+// folder, never the folder holding bb's state).
+//
+// It refuses while a daemon runs (its PID file is in stateDir): the daemon
+// re-reads the mapped folders on every pass, so it would upload the new
+// folder's files, permanently under Object Lock, before the user could preview
+// the first sync with `bb sync --dry-run`.
 func MapTo(ctx context.Context, st *store.Store, be b2.Backend, backendKind, stateDir, dir, remote string, out io.Writer) error {
 	if backendKind != "b2" {
 		return errNeedsB2
+	}
+	if stateDir != "" {
+		if _, running := daemon.RunningPID(stateDir); running {
+			return errDaemonMaps
+		}
 	}
 	prefix, err := normalizeRemotePrefix(remote)
 	if err != nil {
@@ -73,12 +87,13 @@ func MapTo(ctx context.Context, st *store.Store, be b2.Backend, backendKind, sta
 	if _, _, err := planMapping(ctx, st, SyncOptions{Mode: ModeFolder, Folder: remote, Dir: dir, StateDir: stateDir}); err != nil {
 		return err
 	}
-	if err := WatchRemote(ctx, st, dir, remote, out); err != nil {
-		return err
-	}
+	// List before storing the mapping, so a bucket error leaves nothing behind.
 	l, err := be.List(ctx, prefix, false)
 	if err != nil {
 		return fmt.Errorf("%w: check bucket folder %s: %v", apperr.ErrSync, prefix, err)
+	}
+	if err := WatchRemote(ctx, st, dir, remote, out); err != nil {
+		return err
 	}
 	if len(l.Objects) == 0 && len(l.Prefixes) == 0 {
 		if err := be.Upload(ctx, prefix+syncer.FolderMarker, bytes.NewReader(nil), 0); err != nil {
@@ -86,8 +101,8 @@ func MapTo(ctx context.Context, st *store.Store, be b2.Backend, backendKind, sta
 		}
 		fmt.Fprintf(out, "Created bucket folder %s\n", prefix)
 	}
-	fmt.Fprintln(out, "Next: preview the first sync with `bb sync --dry-run`, then run `bb sync` —")
-	fmt.Fprintln(out, "or restart the daemon (`systemctl --user restart backuprepo`) to let it sync.")
+	fmt.Fprintln(out, "Next: preview the first sync with `bb sync --dry-run`, then run `bb sync`;")
+	fmt.Fprintln(out, "start the daemon afterwards (it syncs mapped folders on every pass).")
 	return nil
 }
 
@@ -303,7 +318,7 @@ func SyncMapped(ctx context.Context, st *store.Store, be b2.Backend, backendKind
 		return nil
 	}
 	if backendKind != "b2" {
-		fmt.Fprintf(out, "warning: mapped folders are not synced: %v\n", errNeedsB2)
+		fmt.Fprintf(out, "warning: mapped folders are NOT backed up or synced: %v\n", errNeedsB2)
 		return nil
 	}
 	unlock, err := syncer.Lock(stateDir)

@@ -77,7 +77,7 @@ Partial reconfig without a full `init` (all require existing config):
 
 ### Mapped folders / two-way sync (ADR-028)
 
-- `mapto <P>` (cwd ↔ `P/`, creates `P/.bzEmpty` if empty; does NOT restart the service — preview first), `unmap [dir]` (restarts an active service), `maps`, `sync [--all|--folder F] [--dry-run] [--refill]` (`--all`: `folders.remote_prefix = "/"` = whole bucket). One syncing process at a time: `~/backup_repo/sync.lock` (OS lock). Package `internal/syncer` (`Decide` pure; `Folder`/`All` execute). Needs backend `b2`; `bb sync` refuses while the daemon runs (not with `--dry-run`).
+- `mapto <P>` (cwd ↔ `P/`, creates `P/.bzEmpty` if empty; refuses while the daemon runs — it would sync the new mapping on its next pass before any preview), `unmap [dir]` (restarts an active service), `maps`, `sync [--all|--folder F] [--dry-run] [--refill]` (`--all`: `folders.remote_prefix = "/"` = whole bucket). One syncing process at a time: `~/backup_repo/sync.lock` (OS lock). Package `internal/syncer` (`Decide` pure; `Folder`/`All` execute). Needs backend `b2`; `bb sync` refuses while the daemon runs (not with `--dry-run`).
 - Snapshot columns in `files`: `remote_file_id`, `remote_sha1`, `remote_time` (ms). Conflict losers → `~/backup_repo/conflicts/<YYYYMMDD-HHMMSS>/<folder name>/<rel>` (never overwritten: `name (2).ext`). Download temp files `.bb-sync-*.tmp` (skipped by every walk). Uploads set `src_last_modified_millis`.
 - Runs on every daemon pass (change events + 5-min scan), `bb upload`, web Upload. One-way uploader + `--delete` touch plain folders only.
 

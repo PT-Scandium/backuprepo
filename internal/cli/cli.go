@@ -298,7 +298,9 @@ func printWatched(out io.Writer, watched []store.Folder) {
 // remote "MANDALATAMA-SEWA", path/2025/a.pdf is stored as
 // "MANDALATAMA-SEWA/2025/a.pdf". If path is already watched its prefix is
 // changed; files already backed up are then uploaded again under the new names
-// (unless the bucket already holds them there byte-for-byte). A prefix that
+// (unless the bucket already holds them there byte-for-byte). The CLI reaches
+// this only through MapTo, whose planMapping refuses re-mapping a watched
+// folder, so the prefix-change branch is kept for the API only. A prefix that
 // overlaps another folder's object names is refused, since the two folders
 // would overwrite each other's objects.
 func WatchRemote(ctx context.Context, st *store.Store, path, remote string, out io.Writer) error {

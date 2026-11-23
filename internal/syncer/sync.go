@@ -174,7 +174,7 @@ func Folder(ctx context.Context, st *store.Store, be b2.Backend, folders []store
 		}
 		if !present && remoteLeft {
 			return rep, fmt.Errorf("%w: none of the %d files synced before are in %s — is a drive unmounted? "+
-				"Not refilling it; if you emptied it on purpose, run `bb sync --refill` in it", apperr.ErrSync, len(base), root)
+				"Not refilling it; if you emptied it on purpose, stop the daemon and run `bb sync --refill` (it refills every emptied mapped folder)", apperr.ErrSync, len(base), root)
 		}
 	}
 

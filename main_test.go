@@ -452,3 +452,39 @@ func TestFlagSet(t *testing.T) {
 		}
 	}
 }
+
+// TestWatchRemoteRoutesThroughMapTo: `bb watch DIR --remote P` must take
+// MapTo's guards (b2 only, no re-mapping, never the state folder, refused while
+// the daemon runs). Calling cli.WatchRemote directly from main.go would skip
+// them all, and no cli test would notice.
+func TestWatchRemoteRoutesThroughMapTo(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := map[string]int{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fn := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			if pkg, ok := fn.X.(*ast.Ident); ok && pkg.Name == "cli" {
+				calls["cli."+fn.Sel.Name]++
+			}
+		case *ast.Ident:
+			calls[fn.Name]++
+		}
+		return true
+	})
+	if calls["cli.WatchRemote"] != 0 {
+		t.Error("main.go calls cli.WatchRemote directly; route `watch --remote` through runMapTo")
+	}
+	if calls["runMapTo"] < 2 {
+		t.Errorf("runMapTo is called %d time(s); want both `mapto` and `watch --remote`", calls["runMapTo"])
+	}
+	if calls["cli.MapTo"] != 1 {
+		t.Errorf("cli.MapTo is called %d time(s); want once, from runMapTo", calls["cli.MapTo"])
+	}
+}
