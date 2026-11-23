@@ -439,3 +439,16 @@ func TestStartWarnsMappedFoldersOnS3(t *testing.T) {
 		t.Errorf("warning printed %d times; output:\n%s", n, out.String())
 	}
 }
+
+// TestMapToNeedsStateDir: without bb's state folder mapto could check neither
+// for a running daemon nor for mapping the state folder itself.
+func TestMapToNeedsStateDir(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	if err := MapTo(ctx, st, b2.NewFake(), "b2", "", t.TempDir(), "A", &bytes.Buffer{}); !errors.Is(err, apperr.ErrSync) {
+		t.Fatalf("MapTo without a state folder = %v", err)
+	}
+	if got, _ := st.ListWatched(ctx); len(got) != 0 {
+		t.Errorf("watch list = %+v, want empty", got)
+	}
+}

@@ -75,10 +75,13 @@ func MapTo(ctx context.Context, st *store.Store, be b2.Backend, backendKind, sta
 	if backendKind != "b2" {
 		return errNeedsB2
 	}
-	if stateDir != "" {
-		if _, running := daemon.RunningPID(stateDir); running {
-			return errDaemonMaps
-		}
+	if stateDir == "" {
+		// Without it neither the daemon check nor planMapping's state-folder
+		// guard could run.
+		return fmt.Errorf("%w: mapto needs bb's state folder", apperr.ErrSync)
+	}
+	if _, running := daemon.RunningPID(stateDir); running {
+		return errDaemonMaps
 	}
 	prefix, err := normalizeRemotePrefix(remote)
 	if err != nil {
