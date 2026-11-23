@@ -300,3 +300,43 @@ func TestDeleteDifferentCaseRemovesBackupOnWindows(t *testing.T) {
 		}
 	}
 }
+
+// TestDeleteUntrackedFileUsesFolderPrefix: deleting a file with no backup record
+// in a prefixed folder removes the object under the prefixed name (KeyFor),
+// not under the absolute-path name it never had (ADR-027).
+func TestDeleteUntrackedFileUsesFolderPrefix(t *testing.T) {
+	s, st, fake, dir := newTestServer(t)
+	ctx := context.Background()
+	if err := st.SetFolderPrefix(ctx, dir, "SEWA/"); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "a.pdf")
+	if err := os.WriteFile(file, []byte("pdf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fake.Objects["SEWA/a.pdf"] = []byte("pdf")
+	rec := do(s, "POST", "/delete", "path="+url.QueryEscape(file))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if _, ok := fake.Objects["SEWA/a.pdf"]; ok {
+		t.Error("remote SEWA/a.pdf should be deleted")
+	}
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		t.Errorf("local file should be deleted, stat err = %v", err)
+	}
+}
+
+// TestUploadButtonSyncsMappedFolders: the Upload button also runs the sync
+// hook (mapped folders, ADR-028).
+func TestUploadButtonSyncsMappedFolders(t *testing.T) {
+	s, _, _, dir := newTestServer(t)
+	calls := 0
+	s.SetSync(func(ctx context.Context) error { calls++; return nil })
+	if rec := do(s, "POST", "/upload", "path="+url.QueryEscape(dir)); rec.Code != http.StatusSeeOther {
+		t.Fatalf("status %d", rec.Code)
+	}
+	if calls != 1 {
+		t.Errorf("sync hook called %d times, want 1", calls)
+	}
+}

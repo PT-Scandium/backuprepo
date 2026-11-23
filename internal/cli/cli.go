@@ -17,6 +17,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"golang.org/x/term"
 
@@ -200,10 +201,31 @@ func Watch(ctx context.Context, st *store.Store, path string, out io.Writer) err
 		fmt.Fprintln(out, "its files will then be uploaded again under the new, absolute names.")
 		return nil
 	}
+	watched, err := st.ListWatched(ctx)
+	if err != nil {
+		return err
+	}
+	own := backup.KeySpace(store.Folder{Path: abs})
+	for _, f := range watched {
+		if f.RemotePrefix == "" || f.RemotePrefix == store.RootPrefix {
+			continue // plain folders never collide with each other; a whole-bucket mirror excludes them
+		}
+		if err := checkOverlap(own, f); err != nil {
+			return err
+		}
+	}
+	rekeyed, err := countRekeyed(ctx, st, watched, "", abs, "")
+	if err != nil {
+		return err
+	}
 	if err := st.AddFolder(ctx, abs); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "Watching %s\n", abs)
+	if rekeyed > 0 {
+		fmt.Fprintf(out, "Note: %d file(s) already backed up under a bucket prefix will be uploaded again under their full local paths\n", rekeyed)
+		fmt.Fprintln(out, "(objects under the old names are kept).")
+	}
 	return nil
 }
 
@@ -217,7 +239,7 @@ func Unwatch(ctx context.Context, st *store.Store, path string, out io.Writer) e
 	err := st.RemoveFolder(ctx, path)
 	if err == nil {
 		fmt.Fprintf(out, "Stopped watching %s\n", path)
-		return nil
+		return warnEnclosing(ctx, st, path, out)
 	}
 	if !errors.Is(err, apperr.ErrFolderNotWatched) {
 		return err
@@ -237,7 +259,190 @@ func Unwatch(ctx context.Context, st *store.Store, path string, out io.Writer) e
 		return err
 	}
 	fmt.Fprintf(out, "Stopped watching %s\n", stored)
+	return warnEnclosing(ctx, st, stored, out)
+}
+
+// warnEnclosing tells the user, after unwatching dir, when another watched
+// folder still contains it: dir's files stay backed up, but under the
+// enclosing folder's object names, so they are uploaded again (ADR-027).
+func warnEnclosing(ctx context.Context, st *store.Store, dir string, out io.Writer) error {
+	watched, err := st.ListWatched(ctx)
+	if err != nil {
+		return err
+	}
+	for _, f := range watched {
+		if r, err := filepath.Rel(filepath.Clean(f.Path), filepath.Clean(dir)); err == nil &&
+			r != "." && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+			fmt.Fprintf(out, "Note: %s is still backed up as part of %s, under that folder's object names;\n", dir, f.Path)
+			fmt.Fprintln(out, "its files will be uploaded again under those names (objects under the old names are kept).")
+			return nil
+		}
+	}
 	return nil
+}
+
+// printWatched lists watched folders, one per line, with the bucket prefix of
+// any folder that has one.
+func printWatched(out io.Writer, watched []store.Folder) {
+	for _, f := range watched {
+		if f.RemotePrefix != "" {
+			fmt.Fprintf(out, "  %s -> %s\n", f.Path, remoteLabel(f.RemotePrefix))
+		} else {
+			fmt.Fprintf(out, "  %s\n", f.Path)
+		}
+	}
+}
+
+// WatchRemote watches the directory path with its files stored under the bucket
+// prefix remote instead of under their absolute local paths (ADR-027): with
+// remote "MANDALATAMA-SEWA", path/2025/a.pdf is stored as
+// "MANDALATAMA-SEWA/2025/a.pdf". If path is already watched its prefix is
+// changed; files already backed up are then uploaded again under the new names
+// (unless the bucket already holds them there byte-for-byte). The CLI reaches
+// this only through MapTo, whose planMapping refuses re-mapping a watched
+// folder, so the prefix-change branch is kept for the API only. A prefix that
+// overlaps another folder's object names is refused, since the two folders
+// would overwrite each other's objects.
+func WatchRemote(ctx context.Context, st *store.Store, path, remote string, out io.Writer) error {
+	prefix, err := normalizeRemotePrefix(remote)
+	if err != nil {
+		return err
+	}
+	abs, err := normalizeFolder(path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(abs)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("%w: %s", apperr.ErrFolderNotFound, abs)
+	}
+	existing, err := findWatched(ctx, st, abs)
+	if err != nil {
+		return err
+	}
+	if existing == "" {
+		if legacy, err := findLegacyRelative(ctx, st, abs); err != nil {
+			return err
+		} else if legacy != "" {
+			return fmt.Errorf("%w: %s is watched as the relative path %q by an older bb; run `bb unwatch %s` first",
+				apperr.ErrInvalidPrefix, abs, legacy, legacy)
+		}
+	}
+	watched, err := st.ListWatched(ctx)
+	if err != nil {
+		return err
+	}
+	for _, f := range watched {
+		if f.Path == existing {
+			if f.RemotePrefix == prefix {
+				fmt.Fprintf(out, "Already watching %s -> %s\n", existing, prefix)
+				return nil
+			}
+			continue
+		}
+		if err := checkOverlap(prefix, f); err != nil {
+			return err
+		}
+	}
+	rekeyed, err := countRekeyed(ctx, st, watched, existing, abs, prefix)
+	if err != nil {
+		return err
+	}
+	if existing != "" {
+		if err := st.SetFolderPrefix(ctx, existing, prefix); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Watching %s -> %s (bucket prefix changed)\n", existing, prefix)
+	} else {
+		if err := st.AddFolderWithPrefix(ctx, abs, prefix); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Watching %s -> %s\n", abs, prefix)
+	}
+	if rekeyed > 0 {
+		fmt.Fprintf(out, "Note: %d file(s) already backed up under other names will be uploaded again under %s\n", rekeyed, prefix)
+		fmt.Fprintln(out, "(with the b2 backend, files the bucket already holds byte-for-byte are recorded instead; objects under the old names are kept).")
+	}
+	return nil
+}
+
+// checkOverlap refuses names (a folder's key space) that contain, or lie
+// inside, the key space of another watched folder f with a bucket prefix, or
+// of any folder when names is itself a prefix: the two folders' objects would
+// overwrite each other. Two folders without a prefix never collide (their
+// names are their distinct absolute paths).
+func checkOverlap(names string, f store.Folder) error {
+	other := backup.KeySpace(f)
+	if strings.HasPrefix(names, other) || strings.HasPrefix(other, names) {
+		return fmt.Errorf("%w: %q overlaps the object names of watched folder %s (%s)",
+			apperr.ErrInvalidPrefix, names, f.Path, other)
+	}
+	return nil
+}
+
+// countRekeyed counts tracked, backed-up files under dir whose object key
+// changes once dir is stored under prefix.
+func countRekeyed(ctx context.Context, st *store.Store, watched []store.Folder, existing, dir, prefix string) (int, error) {
+	files, err := st.ListFiles(ctx)
+	if err != nil {
+		return 0, err
+	}
+	after := make([]store.Folder, 0, len(watched)+1)
+	for _, f := range watched {
+		if f.Path != existing {
+			after = append(after, f)
+		}
+	}
+	after = append(after, store.Folder{Path: dir, RemotePrefix: prefix})
+	n := 0
+	for _, fr := range files {
+		if fr.LastBackup == nil {
+			continue
+		}
+		stored := fr.RemoteKey
+		if stored == "" {
+			stored = backup.RemoteKey(fr.Path) // recorded before keys were stored
+		}
+		if r, err := filepath.Rel(dir, fr.Path); err != nil || r == ".." || strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+			continue
+		}
+		if backup.KeyFor(after, fr.Path) != stored {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// maxPrefixLen caps a bucket prefix well under B2's 1024-byte file-name limit,
+// leaving room for the files' relative paths.
+const maxPrefixLen = 512
+
+// normalizeRemotePrefix turns a --remote argument into a bucket prefix: forward
+// slashes, no leading "/", empty segments dropped, ending in "/". It refuses an
+// empty prefix (the bucket root would mix with every other folder's objects),
+// "." and ".." segments, and control characters (invalid in B2 file names).
+func normalizeRemotePrefix(remote string) (string, error) {
+	p := strings.ReplaceAll(strings.TrimSpace(remote), "\\", "/")
+	var parts []string
+	for _, seg := range strings.Split(p, "/") {
+		switch {
+		case seg == "":
+			continue
+		case seg == "." || seg == "..":
+			return "", fmt.Errorf("%w: %q: \".\" and \"..\" are not allowed", apperr.ErrInvalidPrefix, remote)
+		case strings.IndexFunc(seg, unicode.IsControl) >= 0:
+			return "", fmt.Errorf("%w: %q: control characters are not allowed", apperr.ErrInvalidPrefix, remote)
+		}
+		parts = append(parts, seg)
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("%w: empty prefix; name a bucket folder, e.g. --remote MANDALATAMA-SEWA", apperr.ErrInvalidPrefix)
+	}
+	prefix := strings.Join(parts, "/") + "/"
+	if len(prefix) > maxPrefixLen {
+		return "", fmt.Errorf("%w: %q is longer than %d bytes (B2 file names are limited to 1024)", apperr.ErrInvalidPrefix, remote, maxPrefixLen)
+	}
+	return prefix, nil
 }
 
 // expandHome expands a leading "~", "~/" (or "~\" on Windows) in p using
@@ -339,10 +544,12 @@ func List(ctx context.Context, st *store.Store, out io.Writer) error {
 		fmt.Fprintln(out, "No folders are being watched.")
 		return nil
 	}
-	fmt.Fprintln(out, "Watched folders:")
-	for _, f := range folders {
-		fmt.Fprintf(out, "  %s\n", f)
+	watched, err := st.ListWatched(ctx)
+	if err != nil {
+		return err
 	}
+	fmt.Fprintln(out, "Watched folders:")
+	printWatched(out, watched)
 	files, err := st.ListFiles(ctx)
 	if err != nil {
 		return err
@@ -425,10 +632,12 @@ func Config(ctx context.Context, st *store.Store, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Watched folders: %d\n", len(folders))
-	for _, f := range folders {
-		fmt.Fprintf(out, "  %s\n", f)
+	watched, err := st.ListWatched(ctx)
+	if err != nil {
+		return err
 	}
+	fmt.Fprintf(out, "Watched folders: %d\n", len(folders))
+	printWatched(out, watched)
 	return nil
 }
 
@@ -509,6 +718,12 @@ func Upload(ctx context.Context, st *store.Store, be b2.Backend, deleteRemoved b
 	res, err := svc.UploadChanged(ctx)
 	fmt.Fprintf(out, "Uploaded: %d, Skipped: %d, Deleted: %d, Failed: %d\n",
 		res.Uploaded, res.Skipped, res.Deleted, res.Failed)
+	if res.Adopted > 0 {
+		fmt.Fprintf(out, "Already in the bucket (recorded, not uploaded): %d\n", res.Adopted)
+	}
+	if res.HashLookupsFailed > 0 {
+		fmt.Fprintf(out, "Could not ask the bucket for %d file(s)' hashes; uploaded them instead\n", res.HashLookupsFailed)
+	}
 	return err
 }
 

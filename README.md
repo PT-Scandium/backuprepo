@@ -167,6 +167,10 @@ bb upload                       # upload changed files; no-op if nothing changed
 ```
 
 - **Paths are stored absolute.** `bb watch docs/` or `bb watch ~/Documents` (a literal `~` is expanded too) saves the full path, so the daemon and the systemd service — which run from your home directory — back up the folder you meant. An empty path is refused. Watching a folder that's already on the list under another spelling (a trailing `/`, or different letter case on Windows) keeps the existing entry. `bb unwatch` accepts the exact text shown by `bb list` or any spelling of an absolute entry.
+- **Store a folder under a bucket folder of your choice — `--remote`** (since v1.0.13 such a folder is *mapped*: kept in two-way sync, see 4c; the "already in the bucket" check below then applies to one-way folders only, since sync compares both sides itself). By default an object is named after the file's full local path (`home/me/Documents/a.txt`). `bb watch ~/Documents/Contracts --remote Contracts` stores `~/Documents/Contracts/2025/a.pdf` as `Contracts/2025/a.pdf` instead — handy to sync into a bucket folder that already exists. `bb list` / `bb config` show it as `path -> Contracts/`. It is `bb mapto Contracts` run inside that folder, with the same rules: a folder already watched or mapped isn't re-mapped in place (`bb unwatch`/`bb unmap` it first — re-mapping would upload everything again under new names), the prefix can't overlap another watched folder's object names (they'd overwrite each other) and can't be empty, `.`/`..`, or the bucket root.
+  - **Nested folders:** a file belongs to the *innermost* watched folder. Watching `~/Documents` plainly and `~/Documents/Contracts --remote Contracts` stores the contracts under `Contracts/…` and everything else under `home/me/Documents/…`, each file once.
+  - **Files already in the bucket aren't uploaded twice (native `b2` backend):** before uploading a file that isn't backed up under its name yet, `bb` asks B2 for that object's SHA-1; if it matches the local file, the file is just recorded as backed up (`bb upload` prints `Already in the bucket (recorded, not uploaded): N`). So you can download a bucket folder with `bb get Contracts/ ~/Documents/Contracts -r`, watch it with `--remote Contracts`, and only your later edits are uploaded. Any doubt (other content, a large file B2 hashes as `none`, the S3 backend, a lookup error) means a normal upload — on a bucket with Object Lock that is a version you can't delete. So check `bb backend` says `b2`, and **let no scan run until both the prefix and the files are in place**: stop the daemon, `bb watch <dir> --remote P` first (if `<dir>` sits inside an already-watched folder, a scan before that would upload the files under their full local paths), then `bb get P/ <dir> -r` (a scan during the download could upload half-written files), then `bb upload`, then start the daemon again. A failed lookup is reported as `hash lookup failed for N, uploaded instead`.
+  - **Restart the daemon after changing the watch list** (`systemctl --user restart backuprepo`, or `bb stop` / `bb start`): real-time events are set up per folder at startup. (Each scan re-reads folders and prefixes, so a new prefix on a folder that sits inside an already-watched folder applies from the next scan even without a restart.)
 - **Folders added by older versions** may be stored as relative paths (e.g. `docs`). They keep working as before; `bb watch` points them out. To convert one, `bb unwatch docs` then `bb watch /full/path/docs` — its files are then uploaded again under their new, absolute names.
 
 `upload` uploads only what changed and prints a summary:
@@ -252,6 +256,33 @@ bb rm photos/ -r -f                      # delete a whole prefix, skip confirmat
 - `rm` deletes **all versions** of each object (on both backends) and **confirms** unless you pass `-f` or `-y`.
 - **Flags go anywhere:** `-r`, `-f`, `-y`, and `--backend` may appear before, after, or between the path arguments — `bb rm photos/ -r -f` and `bb rm -r -f photos/` are equivalent.
 
+### 4c. Map and sync a folder both ways (mode 3)
+
+Keep a local folder and a bucket folder the same in **both directions**. Needs the native backend (`bb backend b2`).
+
+```sh
+systemctl --user stop backuprepo      # mapto and sync refuse while the daemon runs
+cd ~/Documents/Contracts
+bb mapto Contracts          # map THIS folder to bucket folder Contracts/ (created if it doesn't exist)
+bb sync --dry-run           # preview the first sync: what would be downloaded / uploaded
+bb sync                     # sync every mapped folder now
+systemctl --user start backuprepo     # then let the daemon keep it in sync
+bb maps                     # list mapped folders
+bb unmap                    # stop syncing this folder (files stay on both sides)
+
+mkdir ~/SC-OFFICE && cd ~/SC-OFFICE
+bb sync --all --dry-run     # preview mirroring the WHOLE bucket here
+bb sync --all               # map this folder to the whole bucket and sync it
+bb sync --folder Contracts  # map this folder to bucket folder Contracts/ and sync it
+```
+
+- **Rules:** a change on one side is copied to the other. If a file changed on **both** sides since the last sync, the **newer** version wins; when that's the remote one, your local version is moved to `~/backup_repo/conflicts/<date-time>/<folder>/…` (never thrown away, never overwritten). **Nothing is ever deleted:** a file missing on one side is restored from the other. To really delete a synced file, delete it on both sides (e.g. the web UI's trash can, `bb serve`, removes the local file and its backup together). **On a bucket with Object Lock retention, B2 refuses to delete locked versions:** `bb rm` and the web trash can then fail (the web UI keeps the local file, since it deletes the remote copy first), so a synced file can't be removed until its retention period ends.
+- **Automatic:** with the daemon running (`bb start` or `bb service install`), local changes in mapped folders sync seconds after you save, and remote changes (e.g. a colleague using the Backblaze web UI) come down on each **5-minute** scan. `bb upload` and the web UI's Upload button sync mapped folders too (the web UI prints the result in the `bb serve` terminal). Only one bb process syncs at a time (a lock in `~/backup_repo`); `bb sync` refuses while the daemon runs — stop it first, or use `--dry-run`. **`bb mapto` (and `bb watch <dir> --remote P`) refuses while the daemon runs**: the daemon re-reads mapped folders on every pass and would sync the new folder before you could preview it. Stop it, map, preview, `bb sync`, then start it. `bb unmap` restarts a running service.
+- **One local copy per bucket folder:** two mapped folders can't share bucket objects, a whole-bucket mirror (`--all`) can't coexist with other mapped folders, a mapped folder isn't re-mapped in place (`bb unmap` it first: re-mapping would upload everything again under new names), and a folder containing `~/backup_repo` can't be mapped. Folders backed up one way (`bb watch`), and watched folders nested in a mapped one, are left out of it in both directions.
+- **Safety:** downloads go to a temporary `.bb-sync-*` file, are checked against the remote SHA-1, and replace the local file only if it didn't change meanwhile; a mapped folder that is missing (e.g. an unmounted drive) is skipped, never re-created; one where *every* previously synced file is missing locally while some still exist in the bucket (an empty mount point?) is refused until you stop the daemon and run `bb sync --refill` (which refills every emptied mapped folder); object names that would escape the folder (or that Windows can't store) are refused. Each run lists the bucket folder once (B2 class C call).
+- **Times:** files `bb` uploads carry their modification time (`src_last_modified_millis`, as rclone and the web UI also set); downloads get the remote file's time, so a fresh download never looks "newer". For older objects without it, the upload time is used.
+- `bb watch <dir> --remote P` is the explicit-path form of `bb mapto P`.
+
 ### 5. Check your configuration — `bb config`
 
 ```text
@@ -281,7 +312,11 @@ The applicationKey is masked (last 4 characters); the keyID is just an identifie
 | `bb buckets` | List all buckets the key can see, with their IDs (native B2 API). A key restricted to one bucket can't list them all, so it shows just the configured bucket |
 | `bb bucket [<name> [<id>]]` | Show, or switch to another bucket — changes only the bucket name + ID (keeps credentials/endpoint/region) |
 | `bb appkey [<new-keyID>]` | Replace the stored application key — reads the secret from **stdin** (kept out of shell history); pass a new keyID to rotate the whole pair |
-| `bb watch <dir>` | Add an existing directory to the watch list |
+| `bb watch <dir> [--remote P]` | Add an existing directory to the watch list. `--remote P` maps it to bucket folder `P/` instead (two-way sync, exactly like `bb mapto P` run inside it) |
+| `bb mapto <bucket-folder>` | Map the **current** folder to a bucket folder (created if missing) and keep them in two-way sync |
+| `bb unmap [dir]` | Stop syncing a mapped folder (default: the current one); files stay on both sides |
+| `bb maps` | List mapped folders |
+| `bb sync [--all \| --folder F] [--dry-run]` | Two-way sync now: `--all` mirrors the whole bucket in the current folder, `--folder F` maps the current folder to `F/`, neither syncs every mapped folder. `--dry-run` previews |
 | `bb unwatch <dir>` | Remove a directory from the watch list |
 | `bb list` | List watched folders and tracked files with last-backup times |
 | `bb status` | Configured? backend, watched-folder count, pending uploads, whether a daemon is running, and (Linux) the service state |

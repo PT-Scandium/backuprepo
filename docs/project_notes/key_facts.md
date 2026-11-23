@@ -73,6 +73,13 @@ Partial reconfig without a full `init` (all require existing config):
 ### Watched folders
 
 - Stored as **absolute, cleaned paths** (`cli.normalizeFolder`: `~`/`~/` expanded, `filepath.Abs`, empty path refused) since 2026-11-15; older entries are kept verbatim (not migrated — remote object names derive from walked paths). `watch` reuses an equivalent stored entry (same cleaned path, case-insensitive on Windows; matching is path-only — no stat, symlinks are distinct); `unwatch` matches the exact stored text first, then any equivalent spelling. Unknown commands (typos) exit 1 before `~/backup_repo` is created. See ADR-023.
+- **Object names:** default = absolute path without the leading `/` (`backup.RemoteKey`, ADR-003). A folder watched with `bb watch <dir> --remote P` (column `folders.remote_prefix`, `''` = none, stored ending in `/`) stores files as `P/<path relative to dir>` (`backup.KeyFor`; the **innermost** watched folder decides; nested watched roots are skipped by the outer walk). A record backed up under a key other than the one `KeyFor` now gives counts as changed (a prefix change re-uploads); an empty stored `remote_key` (pre-key records) matches only the default name. Failed SHA-1 lookups fall back to an upload and are counted (`Result.HashLookupsFailed`, shown on the scan line and in `bb upload`). Plain `watch` also refuses names colliding with a prefixed folder and notes re-keyed files. New-to-key files are **adopted** (recorded, not uploaded) when the native B2 `contentSha1` equals the local SHA-1 (`b2.ContentHasher`, B2 backend only). ADR-027.
+
+### Mapped folders / two-way sync (ADR-028)
+
+- `mapto <P>` (cwd ↔ `P/`, creates `P/.bzEmpty` if empty; refuses while the daemon runs — it would sync the new mapping on its next pass before any preview), `unmap [dir]` (restarts an active service), `maps`, `sync [--all|--folder F] [--dry-run] [--refill]` (`--all`: `folders.remote_prefix = "/"` = whole bucket). One syncing process at a time: `~/backup_repo/sync.lock` (OS lock). Package `internal/syncer` (`Decide` pure; `Folder`/`All` execute). Needs backend `b2`; `bb sync` refuses while the daemon runs (not with `--dry-run`).
+- Snapshot columns in `files`: `remote_file_id`, `remote_sha1`, `remote_time` (ms). Conflict losers → `~/backup_repo/conflicts/<YYYYMMDD-HHMMSS>/<folder name>/<rel>` (never overwritten: `name (2).ext`). Download temp files `.bb-sync-*.tmp` (skipped by every walk). Uploads set `src_last_modified_millis`.
+- Runs on every daemon pass (change events + 5-min scan), `bb upload`, web Upload. One-way uploader + `--delete` touch plain folders only.
 
 ### Manual bucket commands
 

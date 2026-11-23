@@ -3,15 +3,19 @@ package b2
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"backuprepo/internal/apperr"
 )
@@ -21,6 +25,16 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	var base string
+	// srcMillis holds each stored file's src_last_modified_millis file info, as
+	// sent by b2_upload_file (X-Bz-Info-* header) or b2_start_large_file (fileInfo).
+	srcMillis := map[string]string{}
+	largeInfo := map[string]string{} // large fileId → pending src_last_modified_millis
+	fileInfo := func(name string) map[string]string {
+		if v, ok := srcMillis[name]; ok {
+			return map[string]string{"src_last_modified_millis": v}
+		}
+		return nil
+	}
 
 	mux.HandleFunc("/b2api/v3/b2_authorize_account", func(w http.ResponseWriter, r *http.Request) {
 		keyID, _, ok := r.BasicAuth()
@@ -85,6 +99,11 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		name := r.Header.Get("X-Bz-File-Name")
 		body, _ := io.ReadAll(r.Body)
 		store[name] = body
+		if v := r.Header.Get("X-Bz-Info-src_last_modified_millis"); v != "" {
+			srcMillis[name] = v
+		} else {
+			delete(srcMillis, name) // a new version without the info
+		}
 		json.NewEncoder(w).Encode(map[string]any{"fileName": name, "fileId": "id-" + name})
 	})
 	mux.HandleFunc("/b2api/v3/b2_list_file_names", func(w http.ResponseWriter, r *http.Request) {
@@ -95,10 +114,13 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		}
 		json.NewDecoder(r.Body).Decode(&req)
 		type f struct {
-			FileName        string `json:"fileName"`
-			ContentLength   int64  `json:"contentLength"`
-			UploadTimestamp int64  `json:"uploadTimestamp"`
-			Action          string `json:"action"`
+			FileName        string            `json:"fileName"`
+			ContentLength   int64             `json:"contentLength"`
+			ContentSha1     string            `json:"contentSha1,omitempty"`
+			FileID          string            `json:"fileId,omitempty"`
+			FileInfo        map[string]string `json:"fileInfo,omitempty"`
+			UploadTimestamp int64             `json:"uploadTimestamp"`
+			Action          string            `json:"action"`
 		}
 		var files []f
 		if req.Delimiter == "/" {
@@ -119,16 +141,22 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 					}
 				} else {
 					// Top-level file under prefix; emit as normal.
-					files = append(files, f{FileName: name, ContentLength: int64(len(data)), Action: "upload"})
+					files = append(files, f{FileName: name, ContentLength: int64(len(data)),
+						FileInfo: fileInfo(name), Action: "upload"})
 				}
 			}
 		} else {
 			for name, data := range store {
 				if strings.HasPrefix(name, req.Prefix) {
-					files = append(files, f{FileName: name, ContentLength: int64(len(data)), Action: "upload"})
+					sum := sha1.Sum(data)
+					files = append(files, f{FileName: name, ContentLength: int64(len(data)),
+						ContentSha1: hex.EncodeToString(sum[:]), FileID: "id-" + name,
+						FileInfo: fileInfo(name), Action: "upload"})
 				}
 			}
 		}
+		// Real B2 returns file names in ascending order; map iteration doesn't.
+		sort.Slice(files, func(i, j int) bool { return files[i].FileName < files[j].FileName })
 		json.NewEncoder(w).Encode(map[string]any{"files": files, "nextFileName": nil})
 	})
 	mux.HandleFunc("/b2api/v3/b2_list_file_versions", func(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +189,7 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 		var req struct{ FileName, FileId string }
 		json.NewDecoder(r.Body).Decode(&req)
 		delete(store, req.FileName)
+		delete(srcMillis, req.FileName)
 		json.NewEncoder(w).Encode(map[string]any{"fileName": req.FileName, "fileId": req.FileId})
 	})
 	mux.HandleFunc("/file/", func(w http.ResponseWriter, r *http.Request) {
@@ -179,9 +208,11 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 	})
 	mux.HandleFunc("/b2api/v3/b2_start_large_file", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
-			FileName string `json:"fileName"`
+			FileName string            `json:"fileName"`
+			FileInfo map[string]string `json:"fileInfo"`
 		}
 		json.NewDecoder(r.Body).Decode(&req)
+		largeInfo["large-"+req.FileName] = req.FileInfo["src_last_modified_millis"]
 		json.NewEncoder(w).Encode(map[string]any{"fileId": "large-" + req.FileName, "fileName": req.FileName})
 	})
 	mux.HandleFunc("/b2api/v3/b2_get_upload_part_url", func(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +240,12 @@ func b2TestServer(t *testing.T, store map[string][]byte) *httptest.Server {
 			full = append(full, p...)
 		}
 		store[name] = full
+		if v := largeInfo[req.FileID]; v != "" {
+			srcMillis[name] = v
+		} else {
+			delete(srcMillis, name)
+		}
+		delete(largeInfo, req.FileID)
 		json.NewEncoder(w).Encode(map[string]any{"fileName": name, "fileId": req.FileID})
 	})
 
@@ -293,7 +330,7 @@ func TestB2LargeFileUpload(t *testing.T) {
 	ctx := context.Background()
 
 	payload := []byte("abcdefghijklmnop") // 16 bytes → 4 parts of 5,5,5,1
-	err := b.uploadLarge(ctx, mustAuth(t, b, ctx), "big.bin", bytes.NewReader(payload), int64(len(payload)))
+	err := b.uploadLarge(ctx, mustAuth(t, b, ctx), "big.bin", bytes.NewReader(payload), int64(len(payload)), nil)
 	if err != nil {
 		t.Fatalf("uploadLarge: %v", err)
 	}
@@ -542,5 +579,47 @@ func TestListBucketsAccessDenied(t *testing.T) {
 	}
 	if !errors.Is(fmt.Errorf("x: %w", statusError(403)), apperr.ErrAccessDenied) {
 		t.Error("wrapped 403 should match ErrAccessDenied")
+	}
+}
+
+// TestB2RemoteSHA1 checks RemoteSHA1 reports the contentSha1 B2 lists for an
+// existing key (also carried in List results) and found=false for a missing
+// one, without matching a longer name that merely starts with the key.
+func TestB2RemoteSHA1(t *testing.T) {
+	data := map[string][]byte{"docs/a.txt": []byte("hello"), "docs/a.txt.bak": []byte("other")}
+	srv := b2TestServer(t, data)
+	be := testB2(t, srv)
+	ctx := context.Background()
+	got, found, err := be.RemoteSHA1(ctx, "docs/a.txt")
+	if err != nil || !found {
+		t.Fatalf("RemoteSHA1(existing) = %q, %v, %v", got, found, err)
+	}
+	if want := "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"; got != want {
+		t.Errorf("sha1 = %q, want %q", got, want)
+	}
+	if _, found, err := be.RemoteSHA1(ctx, "docs/missing.txt"); err != nil || found {
+		t.Errorf("RemoteSHA1(missing) found=%v err=%v, want not found", found, err)
+	}
+	l, err := be.List(ctx, "docs/", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range l.Objects {
+		if o.SHA1 == "" || o.FileID != "id-"+o.Key {
+			t.Errorf("List object %s: SHA1 %q, FileID %q", o.Key, o.SHA1, o.FileID)
+		}
+	}
+}
+
+// TestSrcModified parses B2's src_last_modified_millis file info, treating a
+// missing, malformed or non-positive value as unknown (zero time).
+func TestSrcModified(t *testing.T) {
+	if got := srcModified(map[string]string{"src_last_modified_millis": "1700000000123"}); !got.Equal(time.UnixMilli(1700000000123)) {
+		t.Errorf("srcModified = %v", got)
+	}
+	for _, info := range []map[string]string{nil, {}, {"src_last_modified_millis": "x"}, {"src_last_modified_millis": "0"}} {
+		if got := srcModified(info); !got.IsZero() {
+			t.Errorf("srcModified(%v) = %v, want zero", info, got)
+		}
 	}
 }

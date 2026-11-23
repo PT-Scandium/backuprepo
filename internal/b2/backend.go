@@ -17,6 +17,14 @@ type ObjectInfo struct {
 	Key      string
 	Size     int64
 	Modified time.Time
+	SHA1     string // content SHA-1 as the server reports it; only the native B2 backend fills it
+	// FileID identifies this exact version of the object (native B2 only): any
+	// new upload under the same name gets a new one.
+	FileID string
+	// SrcModified is the source file's modification time recorded at upload
+	// (B2 file info src_last_modified_millis), zero when the uploader didn't
+	// set it (native B2 only).
+	SrcModified time.Time
 }
 
 // Listing is the result of List: files directly under a prefix, plus "folder"
@@ -54,6 +62,26 @@ func FindBucket(ctx context.Context, cfg Config) ([]BucketInfo, error) {
 type Uploader interface {
 	Upload(ctx context.Context, key string, r io.Reader, size int64) error
 	Exists(ctx context.Context, key string) (bool, error)
+}
+
+// ContentHasher is an optional Uploader capability: RemoteSHA1 reports the
+// SHA-1 the server recorded for key's current version (found=false if there is
+// no such object). The backup flow uses it to adopt a remote object that
+// already holds a new file's exact content instead of uploading it again
+// (ADR-027). Only the native B2 backend implements it; the value may be "none"
+// (large files) or "unverified:..." and then never matches a local hash.
+type ContentHasher interface {
+	RemoteSHA1(ctx context.Context, key string) (sha1 string, found bool, err error)
+}
+
+// ModTimeUploader is an optional Uploader capability: UploadWithModTime stores
+// key exactly like Upload and also records modTime as the object's source
+// modification time (B2 file info src_last_modified_millis; on the S3 API the
+// x-amz-meta-src_last_modified_millis header B2 maps to it), which listings
+// report back as ObjectInfo.SrcModified. A zero modTime records nothing. Sync
+// uses it so "newest wins" compares the files' own times (ADR-028).
+type ModTimeUploader interface {
+	UploadWithModTime(ctx context.Context, key string, r io.Reader, size int64, modTime time.Time) error
 }
 
 // Deleter removes a single object. Backend satisfies it; the backup flow uses it

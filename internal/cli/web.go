@@ -13,7 +13,11 @@ import (
 
 // Serve starts the localhost web UI (port 9171) in the foreground until stopped
 // (Ctrl-C or the Close button). It does not start the daemon.
-func Serve(ctx context.Context, st *store.Store, be b2.Backend, out io.Writer) error {
+//
+// backendKind and stateDir configure the Upload button's sync of mapped
+// folders (see SyncMapped); its report goes to out (the terminal running
+// `bb serve`).
+func Serve(ctx context.Context, st *store.Store, be b2.Backend, backendKind, stateDir string, out io.Writer) error {
 	cfg, err := st.GetConfig(ctx)
 	if err != nil {
 		return err
@@ -22,5 +26,9 @@ func Serve(ctx context.Context, st *store.Store, be b2.Backend, out io.Writer) e
 	if cfg.Endpoint != "" {
 		location = cfg.Bucket + " @ " + cfg.Endpoint
 	}
-	return web.New(st, be, location).Serve(ctx, out)
+	srv := web.New(st, be, location)
+	srv.SetSync(func(ctx context.Context) error {
+		return SyncMapped(ctx, st, be, backendKind, stateDir, out)
+	})
+	return srv.Serve(ctx, out)
 }
